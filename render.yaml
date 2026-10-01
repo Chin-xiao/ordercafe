@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: api-order-cafe
+    env: php
+    buildCommand: "composer install --no-dev --optimize-autoloader && php artisan migrate --force"
+    startCommand: "vendor/bin/heroku-php-apache2 public/"
