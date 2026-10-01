@@ -1,7 +1,7 @@
 services:
   - type: web
     name: api-order-cafe
-    env: docker
+    env: native
     region: oregon
     plan: free
     buildCommand: "composer install --no-dev --optimize-autoloader && php artisan migrate --force"
