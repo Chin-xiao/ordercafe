@@ -17,13 +17,23 @@ Route::prefix('mini-app')->middleware(['telegram.mini.app'])->group(function () 
 });
 
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
+    // Support both /order-sessions and /sessions to match your frontend
     Route::get('/order-sessions', [OrderSessionController::class, 'index']);
+    Route::get('/sessions', [OrderSessionController::class, 'index']);
+
     Route::post('/order-sessions', [OrderSessionController::class, 'store']);
+    Route::post('/sessions', [OrderSessionController::class, 'store']);
+
     Route::get('/order-sessions/{orderSession}', [OrderSessionController::class, 'show']);
+    Route::get('/sessions/{orderSession}', [OrderSessionController::class, 'show']);
+
     Route::post('/order-sessions/{orderSession}/start', [OrderSessionController::class, 'start']);
+    Route::post('/sessions/{orderSession}/start', [OrderSessionController::class, 'start']);
+
     Route::post('/order-sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
-});
-Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
+    Route::post('/sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
+
+    // Reports and Dashboard
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/reports/sales', [ReportController::class, 'sales']);
     Route::get('/reports/products', [ReportController::class, 'products']);
