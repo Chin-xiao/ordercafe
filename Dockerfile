@@ -10,3 +10,7 @@ RUN composer install --no-dev --optimize-autoloader
 
 # Ensure scripts have execution permissions
 RUN chmod +x /var/www/html/scripts/00-laravel-deploy.sh
+
+RUN composer install --no-dev --optimize-autoloader
+RUN php artisan config:clear
+RUN php artisan route:clear
