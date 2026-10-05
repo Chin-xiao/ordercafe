@@ -12,10 +12,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-            $middleware->alias([
-                'telegram.mini.app' => \App\Http\Middleware\VerifyTelegramInitData::class,
-            ]);
-        })
+        // Enable CORS globally so preflight and error responses include headers
+        $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
+
+        // Your custom middleware aliases
+        $middleware->alias([
+            'telegram.mini.app' => \App\Http\Middleware\VerifyTelegramInitData::class,
+        ]);
+    })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
     })->create();
