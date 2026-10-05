@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
 use App\Http\Controllers\MiniApp\SessionController;
+use App\Http\Controllers\TelegramWebhookController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -46,8 +47,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Admin Products Management
     Route::get('/products', [MiniAppProductController::class, 'index']);
 
+    Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle']);
+
     // Dashboard & Reports (Matching frontend paths explicitly)
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/reports/sales', [ReportController::class, 'sales']);
     Route::get('/reports/products', [ReportController::class, 'products']);
+
 });
