@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -21,7 +22,10 @@ class ReportController extends Controller
 
         $data = $this->reportService->getSalesSummary($dateFrom, $dateTo);
 
-        return response()->json($data);
+        return response()->json([
+            'success' => true,
+            'data' => $data
+        ]);
     }
 
     public function products(Request $request)
@@ -31,13 +35,20 @@ class ReportController extends Controller
 
         $data = $this->reportService->getProductPopularity($dateFrom, $dateTo);
 
-        return response()->json(['data' => $data]);
+        return response()->json([
+            'success' => true,
+            'data' => $data
+        ]);
     }
 
     public function dashboard(Request $request)
     {
+
         $data = $this->reportService->getDashboardMetrics();
 
-        return response()->json($data);
+        return response()->json([
+            'success' => true,
+            'data' => $data
+        ]);
     }
 }
