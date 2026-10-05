@@ -2,9 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Admin\TelegramSettingsController;
 use App\Models\TelegramGroup;
-use App\Models\TelegramSetting; // Or your TelegramGroup model depending on how you named it
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 
@@ -14,42 +12,40 @@ class TelegramWebhookController extends Controller
     {
         $update = $request->all();
 
-        // Check if message exists from Telegram
-        if (isset($update['message'])) {
-            $chat = $update['message']['chat'];
-            $text = $update['message']['text'] ?? '';
-            $chatId = $chat['id'];
-            $chatType = $chat['type']; // 'group' or 'supergroup'
+        // Check if the message exists and contains text
+        if (isset($update['message']['text'])) {
+            $text = $update['message']['text'];
+            $chatId = $update['message']['chat']['id'];
+            $groupName = $update['message']['chat']['title'] ?? 'Telegram Group';
 
-            // Check if it's a group command starting with /verify
-            if (in_array($chatType, ['group', 'supergroup']) && str_starts_with($text, '/verify')) {
-                $parts = explode(' ', $text);
-                if (isset($parts[1])) {
-                    $token = trim($parts[1]);
+            // Check if the message starts with /setup
+            if (str_starts_with($text, '/setup')) {
+                // Extract everything after /setup (e.g. CAFE_9X2K4L1M)
+                $token = trim(str_replace('/setup', '', $text));
 
-                    // Find the setting matching this token
-                    $setting = TelegramGroup::where('verify_token', $token)->first();
-                    $botToken = env('TELEGRAM_BOT_TOKEN');
+                // Find the group record matching this unique random token from the admin panel
+                $group = TelegramGroup::where('verify_token', $token)->first();
 
-                    if ($setting) {
-                        $setting->chat_id = $chatId;
-                        $setting->group_name = $chat['title'] ?? 'Telegram Group';
-                        $setting->is_verified = true;
-                        $setting->save();
+                $botToken = env('TELEGRAM_BOT_TOKEN');
 
-                        // Success response message into the group
-                        Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
-                            'chat_id' => $chatId,
-                            'text' => "✅ *Group Linked Successfully!*\n\nThis group is now connected to your Cafe Order System dashboard.",
-                            'parse_mode' => 'Markdown'
-                        ]);
-                    } else {
-                        // Error response
-                        Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
-                            'chat_id' => $chatId,
-                            'text' => "❌ Invalid verification token. Please check your admin settings panel.",
-                        ]);
-                    }
+                if ($group) {
+                    // Update group info and mark as verified
+                    $group->chat_id = $chatId;
+                    $group->group_name = $groupName;
+                    $group->is_verified = true;
+                    $group->save();
+
+                    // Automatically reply back to the Telegram group
+                    Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
+                        'chat_id' => $chatId,
+                        'text' => "✅ Group successfully verified and linked to the Cafe Ordering system!",
+                    ]);
+                } else {
+                    // Notify if the token is invalid or expired
+                    Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
+                        'chat_id' => $chatId,
+                        'text' => "❌ Invalid verification token. Please check your admin panel for the correct command.",
+                    ]);
                 }
             }
         }
