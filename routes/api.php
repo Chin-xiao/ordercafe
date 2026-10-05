@@ -3,7 +3,7 @@
 use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\MiniApp\OrderController;
-use App\Http\Controllers\MiniApp\ProductController;
+use App\Http\Controllers\MiniApp\ProductController; // Use this for both!
 use App\Http\Controllers\MiniApp\SessionController;
 use Illuminate\Support\Facades\Route;
 
@@ -17,7 +17,7 @@ Route::prefix('mini-app')->middleware(['telegram.mini.app'])->group(function () 
 });
 
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Support both /order-sessions and /sessions to match your frontend
+    // Order Sessions
     Route::get('/order-sessions', [OrderSessionController::class, 'index']);
     Route::get('/sessions', [OrderSessionController::class, 'index']);
 
@@ -33,7 +33,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/order-sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
     Route::post('/sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
 
-    // Reports and Dashboard
+    // Reuse MiniApp ProductController for Admin products listing
+    Route::get('/products', [ProductController::class, 'index']);
+
+    // Dashboard & Reports
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/reports/sales', [ReportController::class, 'sales']);
     Route::get('/reports/products', [ReportController::class, 'products']);
