@@ -52,8 +52,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/order-sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
     Route::post('/sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
 
-    // Admin Products Management
+    // Admin Products & Categories Management
     Route::get('/products', [MiniAppProductController::class, 'index']);
+    Route::get('/categories', [MiniAppProductController::class, 'categories']); // <--- Added this to fix the 404
 
     // Telegram Settings (Managed by logged-in admins)
     Route::get('/telegram-settings', [TelegramSettingsController::class, 'show']);
