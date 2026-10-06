@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\TelegramSettingsController;
+use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
 use App\Http\Controllers\MiniApp\SessionController;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle']);
-
+Route::post('/admin/login', [AuthController::class, 'login']);
 /*
 |--------------------------------------------------------------------------
 | Mini App Routes (Customer Facing via Telegram)
