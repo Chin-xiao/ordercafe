@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 Route::post('/telegram/webhook', [TelegramWebhookController::class, 'handle']);
+Route::post('/admin/register', [AuthController::class, 'register']);
 Route::post('/admin/login', [AuthController::class, 'login']);
 /*
 |--------------------------------------------------------------------------
@@ -65,4 +66,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/reports/sales', [ReportController::class, 'sales']);
     Route::get('/reports/products', [ReportController::class, 'products']);
+
+    Route::get('/admin/user', [AuthController::class, 'user']);
+    Route::post('/admin/logout', [AuthController::class, 'logout']);
 });

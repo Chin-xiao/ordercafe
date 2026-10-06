@@ -3,11 +3,41 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    // Handle User Registration
+    public function register(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'], // expects password_confirmation field
+        ]);
+
+        $user = User::create([
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+            'is_admin' => true, // Set true if this is an admin registration gateway
+        ]);
+
+        // Generate Sanctum Token
+        $token = $user->createToken('admin-token')->plainTextToken;
+
+        return response()->json([
+            'message' => 'Account registered successfully',
+            'token' => $token,
+            'user' => $user,
+        ], 201);
+    }
+
+    // Handle User Login
     public function login(Request $request)
     {
         $credentials = $request->validate([
@@ -16,23 +46,36 @@ class AuthController extends Controller
         ]);
 
         if (!Auth::attempt($credentials)) {
-            return response()->json(['message' => 'Invalid email or password.'], 401);
+            return response()->json([
+                'message' => 'Invalid email or password.'
+            ], 401);
         }
 
         $user = Auth::user();
 
-        // Optional: Ensure the user has admin privileges (adjust based on your column name)
-        if (property_exists($user, 'is_admin') && !$user->is_admin) {
-            return response()->json(['message' => 'Access denied. Administrator privileges required.'], 403);
-        }
-
-        // Revoke old tokens if desired, then generate a new Sanctum token
+        // Generate new Sanctum Token
         $token = $user->createToken('admin-token')->plainTextToken;
 
         return response()->json([
             'message' => 'Login successful',
             'token' => $token,
             'user' => $user,
+        ]);
+    }
+
+    // Get Authenticated User Profile
+    public function user(Request $request)
+    {
+        return response()->json($request->user());
+    }
+
+    // Logout (Revoke Token)
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json([
+            'message' => 'Logged out successfully'
         ]);
     }
 }
