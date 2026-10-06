@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\TelegramGroup;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log; // <--- Make sure this is imported
 
 class TelegramWebhookController extends Controller
 {
@@ -12,39 +13,37 @@ class TelegramWebhookController extends Controller
     {
         $update = $request->all();
 
-        // Check if the message exists and contains text
+        // Log the raw incoming request from Telegram to your storage/logs/laravel.log
+        Log::info('Telegram Webhook Payload:', $update);
+
         if (isset($update['message']['text'])) {
             $text = $update['message']['text'];
             $chatId = $update['message']['chat']['id'];
             $groupName = $update['message']['chat']['title'] ?? 'Telegram Group';
 
-            // Check if the message starts with /setup
-            if (str_starts_with($text, '/setup')) {
-                // Extract everything after /setup (e.g. CAFE_9X2K4L1M)
-                $token = trim(str_replace('/setup', '', $text));
+            // Clean text to handle /setup@ahseven_bot format as well
+            $cleanText = preg_replace('/@\w+/', '', $text); // Removes @ahseven_bot if present
 
-                // Find the group record matching this unique random token from the admin panel
+            if (str_starts_with(trim($cleanText), '/setup')) {
+                $token = trim(str_replace('/setup', '', $cleanText));
+
                 $group = TelegramGroup::where('verify_token', $token)->first();
-
                 $botToken = env('TELEGRAM_BOT_TOKEN');
 
                 if ($group) {
-                    // Update group info and mark as verified
                     $group->chat_id = $chatId;
                     $group->group_name = $groupName;
                     $group->is_verified = true;
                     $group->save();
 
-                    // Automatically reply back to the Telegram group
                     Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
                         'chat_id' => $chatId,
                         'text' => "✅ Group successfully verified and linked to the Cafe Ordering system!",
                     ]);
                 } else {
-                    // Notify if the token is invalid or expired
                     Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
                         'chat_id' => $chatId,
-                        'text' => "❌ Invalid verification token. Please check your admin panel for the correct command.",
+                        'text' => "❌ Invalid verification token: {$token}",
                     ]);
                 }
             }
