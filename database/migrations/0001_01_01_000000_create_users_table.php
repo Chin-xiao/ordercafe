@@ -9,9 +9,10 @@ return new class extends Migration {
     {
         Schema::create('users', function (Blueprint $table) {
             $table->id();
-            $table->string('name'); // <--- Added for Admin registration
-            $table->string('email')->unique(); // <--- Added for Admin login/registration
-            $table->string('password'); // <--- Added for Admin authentication
+            $table->string('name');
+            $table->string('email')->unique();
+            $table->string('password');
+            $table->boolean('is_admin')->default(false); // <--- Make sure this is here
             $table->bigInteger('telegram_id')->unique()->nullable();
             $table->string('username')->nullable();
             $table->string('first_name')->nullable();
