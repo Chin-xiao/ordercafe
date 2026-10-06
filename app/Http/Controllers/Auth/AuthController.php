@@ -13,29 +13,28 @@ class AuthController extends Controller
 {
     // Handle User Registration
     public function register(Request $request)
-    {
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'], // expects password_confirmation field
-        ]);
+{
+    $validated = $request->validate([
+        'name' => ['required', 'string', 'max:255'],
+        'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
+        'password' => ['required', 'string', 'min:8'], // or with confirmed
+    ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'is_admin' => true, // Set true if this is an admin registration gateway
-        ]);
+    $user = User::create([
+        'name' => $validated['name'],
+        'email' => $validated['email'],
+        'password' => Hash::make($validated['password']),
+        'is_admin' => true,
+    ]);
 
-        // Generate Sanctum Token
-        $token = $user->createToken('admin-token')->plainTextToken;
+    $token = $user->createToken('admin-token')->plainTextToken;
 
-        return response()->json([
-            'message' => 'Account registered successfully',
-            'token' => $token,
-            'user' => $user,
-        ], 201);
-    }
+    return response()->json([
+        'message' => 'Account registered successfully',
+        'token' => $token,
+        'user' => $user,
+    ], 201);
+}
 
     // Handle User Login
     public function login(Request $request)

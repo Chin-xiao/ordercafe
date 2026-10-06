@@ -11,14 +11,18 @@ class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
     protected $fillable = [
-        'telegram_id',
-        'username',
-        'first_name',
-        'last_name',
-        'phone',
-        'role',
-        'is_active',
-    ];
+    'name',      // <--- Add this
+    'email',     // <--- Add this
+    'password',  // <--- Add this (if not already hidden/guarded)
+    'telegram_id',
+    'username',
+    'first_name',
+    'last_name',
+    'phone',
+    'role',
+    'is_active',
+    'is_admin',
+];
 
     protected $casts = [
         'is_active' => 'boolean',

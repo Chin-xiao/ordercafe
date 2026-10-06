@@ -47,3 +47,6 @@ CMD php artisan config:clear && \
     php artisan route:cache && \
     php artisan migrate --force && \
     apache2-foreground
+
+    RUN composer install --optimize-autoloader --no-dev \
+    && php artisan package:discover --ansi
