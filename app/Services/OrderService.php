@@ -75,7 +75,7 @@ class OrderService
                 'submitted_at' => Carbon::now(),
             ]);
 
-            $totalAmount = 0;
+            $totalCents = 0;
             $itemsData = $data['items'];
 
             // Extract all product IDs to query in bulk
@@ -103,9 +103,10 @@ class OrderService
                 $product = $products[$productId];
 
                 // CRITICAL: Pull unit price strictly from the database, never trust the frontend
-                $unitPrice = $product->price;
-                $subtotal = $unitPrice * $quantity;
-                $totalAmount += $subtotal;
+                $unitPrice = number_format((float) $product->price, 2, '.', '');
+                $subtotalCents = (int) round((float) $unitPrice * 100) * $quantity;
+                $subtotal = number_format($subtotalCents / 100, 2, '.', '');
+                $totalCents += $subtotalCents;
 
                 // Create order item snapshot
                 $order->items()->create([
@@ -125,7 +126,7 @@ class OrderService
             }
 
             // 7. Update order with calculated total sum
-            $order->update(['total_amount' => $totalAmount]);
+            $order->update(['total_amount' => number_format($totalCents / 100, 2, '.', '')]);
 
             return $order->load('items', 'session');
         });

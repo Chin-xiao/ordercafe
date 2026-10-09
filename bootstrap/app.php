@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Your custom middleware aliases
         $middleware->alias([
+            'admin' => \App\Http\Middleware\EnsureAdmin::class,
             'telegram.mini.app' => \App\Http\Middleware\VerifyTelegramInitData::class,
         ]);
     })

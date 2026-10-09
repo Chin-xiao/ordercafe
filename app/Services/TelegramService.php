@@ -4,18 +4,19 @@ namespace App\Services;
 
 use App\Models\OrderSession;
 use App\Models\TelegramGroup;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
+use RuntimeException;
 
 class TelegramService
 {
-    protected string $botToken;
+    protected ?string $botToken;
     protected string $apiUrl;
 
     public function __construct()
     {
         $this->botToken = config('services.telegram.bot_token');
-        $this->apiUrl = "https://api.telegram.org/bot{$this->botToken}";
+        $this->apiUrl = $this->botToken ? "https://api.telegram.org/bot{$this->botToken}" : '';
     }
 
     /**
@@ -23,9 +24,14 @@ class TelegramService
      */
     public function sendOrderStartedNotification(OrderSession $session): void
     {
-        $groups = TelegramGroup::where('is_active', true)->get();
+        $groups = $this->verifiedGroups();
 
-        $miniAppUrl = config('services.telegram.mini_app_url'); // e.g. https://t.co/YourBotName/app
+        $miniAppUrl = config('services.telegram.mini_app_url');
+        if (!is_string($miniAppUrl)
+            || !filter_var($miniAppUrl, FILTER_VALIDATE_URL)
+            || parse_url($miniAppUrl, PHP_URL_SCHEME) !== 'https') {
+            throw new RuntimeException('A valid HTTPS Telegram Mini App URL is not configured.');
+        }
 
         $message = "🍔 *CAFE ORDER IS OPEN!*\n\n";
         $message .= "📋 *{$session->title}*\n";
@@ -36,7 +42,6 @@ class TelegramService
 
         $message .= "\nPlease place your order before the deadline! ❤️";
 
-        // Telegram Inline Keyboard with WebApp button
         $replyMarkup = [
             'inline_keyboard' => [
                 [
@@ -59,7 +64,7 @@ class TelegramService
     public function sendOrderSummaryNotification(array $summaryData): void
     {
         $session = $summaryData['session'];
-        $groups = TelegramGroup::where('is_active', true)->get();
+        $groups = $this->verifiedGroups();
 
         $message = "🔴 *CAFE ORDER CLOSED*\n\n";
         $message .= "📋 *{$session->title}*\n\n";
@@ -87,29 +92,46 @@ class TelegramService
      */
     public function sendMessage(int|string $chatId, string $text, ?array $replyMarkup = null): void
     {
-        if (empty($this->botToken)) {
-            Log::warning('Telegram bot token is missing. Message not sent.');
-            return;
+        if (!$this->botToken) {
+            throw new RuntimeException('Telegram bot token is not configured.');
+        }
+
+        $payload = [
+            'chat_id' => $chatId,
+            'text' => $text,
+            'parse_mode' => 'Markdown',
+        ];
+
+        if ($replyMarkup) {
+            $payload['reply_markup'] = $replyMarkup;
         }
 
         try {
-            $payload = [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'parse_mode' => 'Markdown',
-            ];
-
-            if ($replyMarkup) {
-                $payload['reply_markup'] = $replyMarkup;
-            }
-
-            $response = Http::post("{$this->apiUrl}/sendMessage", $payload);
-
-            if ($response->failed()) {
-                Log::error('Failed to send Telegram message: ' . $response->body());
-            }
-        } catch (\Exception $e) {
-            Log::error('Exception while sending Telegram message: ' . $e->getMessage());
+            $response = Http::timeout(10)->post("{$this->apiUrl}/sendMessage", $payload);
+        } catch (ConnectionException) {
+            throw new RuntimeException('Could not deliver the Telegram notification.');
         }
+
+        if ($response->failed() || $response->json('ok') !== true) {
+            throw new RuntimeException('Telegram rejected the notification request.');
+        }
+    }
+
+    private function verifiedGroups()
+    {
+        if (!$this->botToken) {
+            throw new RuntimeException('Telegram bot token is not configured.');
+        }
+
+        $groups = TelegramGroup::where('is_active', true)
+            ->where('is_verified', true)
+            ->whereNotNull('telegram_chat_id')
+            ->get();
+
+        if ($groups->isEmpty()) {
+            throw new RuntimeException('No verified Telegram group is configured.');
+        }
+
+        return $groups;
     }
 }

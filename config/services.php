@@ -35,8 +35,12 @@ return [
         ],
     ],
     'telegram' => [
-    'bot_token' => env('TELEGRAM_BOT_TOKEN'),
-    'mini_app_url' => env('TELEGRAM_MINI_APP_URL'),
-],
+        'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+        'mini_app_url' => env('TELEGRAM_MINI_APP_URL'),
+    ],
+    'admin' => [
+        'email' => env('ADMIN_EMAIL', 'admin@ordercafe.com'),
+        'password' => env('ADMIN_PASSWORD'),
+    ],
 
 ];

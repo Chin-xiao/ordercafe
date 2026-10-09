@@ -26,7 +26,13 @@ class User extends Authenticatable
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_admin' => 'boolean',
         'telegram_id' => 'integer',
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
     ];
 
     public function orders()

@@ -4,16 +4,17 @@ namespace App\Http\Middleware;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 class VerifyTelegramInitData
 {
     public function handle(Request $request, Closure $next): Response
     {
-        // Expecting initData string passed in the header (e.g., X-Telegram-Init-Data)
         $initData = $request->header('X-Telegram-Init-Data') ?: $request->input('init_data');
 
-        if (!$initData) {
+        if (!is_string($initData) || $initData === '') {
             return response()->json([
                 'message' => 'Unauthorized: Missing Telegram initialization data.'
             ], Response::HTTP_UNAUTHORIZED);
@@ -27,19 +28,20 @@ class VerifyTelegramInitData
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
-        // Validate the initData signature and parse user payload
         $userData = $this->validateAndParseInitData($initData, $botToken);
 
-        if (!$userData) {
+        if (!$userData || !isset($userData['id'])) {
             return response()->json([
                 'message' => 'Unauthorized: Invalid Telegram signature or expired data.'
             ], Response::HTTP_UNAUTHORIZED);
         }
 
-        // Find or create the user in the database using telegram_id
         $user = User::firstOrCreate(
             ['telegram_id' => $userData['id']],
             [
+                'name' => $userData['first_name'] ?? $userData['username'] ?? 'Telegram user',
+                'email' => 'telegram' . $userData['id'] . '@users.invalid',
+                'password' => Hash::make(Str::random(64)),
                 'username' => $userData['username'] ?? null,
                 'first_name' => $userData['first_name'] ?? null,
                 'last_name' => $userData['last_name'] ?? null,
@@ -48,21 +50,19 @@ class VerifyTelegramInitData
             ]
         );
 
-        // Check if user account has been deactivated
         if (!$user->is_active) {
             return response()->json([
                 'message' => 'Forbidden: Your account has been disabled.'
             ], Response::HTTP_FORBIDDEN);
         }
 
-        // Update user profile details if they changed on Telegram
-        $user->update([
-            'username' => $userData['username'] ?? $user->username,
-            'first_name' => $userData['first_name'] ?? $user->first_name,
-            'last_name' => $userData['last_name'] ?? $user->last_name,
-        ]);
+        $profile = array_filter([
+            'username' => $userData['username'] ?? null,
+            'first_name' => $userData['first_name'] ?? null,
+            'last_name' => $userData['last_name'] ?? null,
+        ], fn ($value) => $value !== null);
+        $user->fill($profile)->save();
 
-        // Automatically authenticate the user for this request lifecycle
         $request->setUserResolver(fn() => $user);
 
         return $next($request);
@@ -77,45 +77,42 @@ class VerifyTelegramInitData
     {
         parse_str($initData, $params);
 
-        if (!isset($params['hash'])) {
+        if (!isset($params['hash'], $params['auth_date'], $params['user'])
+            || !is_string($params['hash'])
+            || !preg_match('/^[a-f0-9]{64}$/i', $params['hash'])
+            || !ctype_digit((string) $params['auth_date'])) {
             return null;
         }
 
         $receivedHash = $params['hash'];
         unset($params['hash']);
 
-        // Sort keys alphabetically
         ksort($params);
 
         $dataCheckString = collect($params)
-            ->map(fn($value, $key) => "{$key}={$value}")
+            ->map(fn ($value, $key) => "{$key}={$value}")
             ->implode("\n");
 
-        // Step 1: Generate secret key using HMAC-SHA256 with "WebAppData" as key and bot token as data
         $secretKey = hash_hmac('sha256', $botToken, 'WebAppData', true);
-
-        // Step 2: Calculate hash of the data-check-string using the secret key
         $calculatedHash = hash_hmac('sha256', $dataCheckString, $secretKey);
 
-        // Step 3: Compare hashes safely against timing attacks
         if (!hash_equals($calculatedHash, $receivedHash)) {
             return null;
         }
 
-        // Optional: Check data age to prevent replay attacks (e.g., must be within 24 hours)
-        if (isset($params['auth_date'])) {
-            $authDate = (int) $params['auth_date'];
-            if (time() - $authDate > 86400) {
-                return null; // Expired
-            }
+        $authDate = (int) $params['auth_date'];
+        if ($authDate > time() + 30 || time() - $authDate > 86400) {
+            return null;
         }
 
-        // Decode the user JSON payload returned by Telegram
-        if (isset($params['user'])) {
-            $userJson = json_decode($params['user'], true);
-            return is_array($userJson) ? $userJson : null;
+        $userJson = json_decode($params['user'], true);
+
+        if (!is_array($userJson)
+            || !isset($userJson['id'])
+            || !ctype_digit((string) $userJson['id'])) {
+            return null;
         }
 
-        return null;
+        return $userJson;
     }
 }

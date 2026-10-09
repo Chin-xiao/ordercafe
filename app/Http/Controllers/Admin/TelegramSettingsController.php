@@ -11,17 +11,19 @@ class TelegramSettingsController extends Controller
 {
     public function show()
     {
-        // Find the first group record, or create one if it doesn't exist yet
         $group = TelegramGroup::first();
 
         if (!$group || empty($group->verify_token)) {
-            $group = TelegramGroup::updateOrCreate(
-                ['id' => $group?->id],
-                [
-                    'verify_token' => 'CAFE_' . strtoupper(Str::random(8)),
-                    'is_verified' => false,
-                ]
-            );
+            $attributes = [
+                'verify_token' => 'CAFE_' . strtoupper(Str::random(32)),
+                'is_verified' => false,
+            ];
+
+            if ($group) {
+                $group->update($attributes);
+            } else {
+                $group = TelegramGroup::create($attributes);
+            }
         }
 
         return response()->json([
@@ -30,8 +32,8 @@ class TelegramSettingsController extends Controller
                 'verify_token' => $group->verify_token,
                 'setup_command' => '/setup ' . $group->verify_token,
                 'is_verified' => $group->is_verified,
-                'group_name' => $group->group_name,
-                'chat_id' => $group->chat_id,
+                'group_name' => $group->group_name ?: $group->title,
+                'chat_id' => $group->telegram_chat_id,
             ]
         ]);
     }
@@ -39,10 +41,12 @@ class TelegramSettingsController extends Controller
     public function regenerate()
     {
         $group = TelegramGroup::first() ?? new TelegramGroup();
-        $group->verify_token = 'CAFE_' . strtoupper(Str::random(8));
-        $group->chat_id = null;
+        $group->verify_token = 'CAFE_' . strtoupper(Str::random(32));
+        $group->telegram_chat_id = null;
+        $group->title = null;
         $group->group_name = null;
         $group->is_verified = false;
+        $group->is_active = true;
         $group->save();
 
         return response()->json([

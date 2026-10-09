@@ -3,18 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\TelegramGroup;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log; // <--- Make sure this is imported
 
 class TelegramWebhookController extends Controller
 {
+    public function __construct(private TelegramService $telegramService)
+    {
+    }
+
     public function handle(Request $request)
     {
         $update = $request->all();
-
-        // Log the raw incoming request from Telegram to your storage/logs/laravel.log
-        Log::info('Telegram Webhook Payload:', $update);
 
         if (isset($update['message']['text'])) {
             $text = $update['message']['text'];
@@ -28,23 +28,22 @@ class TelegramWebhookController extends Controller
                 $token = trim(str_replace('/setup', '', $cleanText));
 
                 $group = TelegramGroup::where('verify_token', $token)->first();
-                $botToken = env('TELEGRAM_BOT_TOKEN');
-
                 if ($group) {
-                    $group->chat_id = $chatId;
+                    $group->telegram_chat_id = $chatId;
+                    $group->title = $groupName;
                     $group->group_name = $groupName;
                     $group->is_verified = true;
                     $group->save();
 
-                    Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
-                        'chat_id' => $chatId,
-                        'text' => "✅ Group successfully verified and linked to the Cafe Ordering system!",
-                    ]);
+                    $this->telegramService->sendMessage(
+                        $chatId,
+                        '✅ Group successfully verified and linked to the Cafe Ordering system!'
+                    );
                 } else {
-                    Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
-                        'chat_id' => $chatId,
-                        'text' => "❌ Invalid verification token: {$token}",
-                    ]);
+                    $this->telegramService->sendMessage(
+                        $chatId,
+                        "❌ Invalid verification token: {$token}"
+                    );
                 }
             }
         }
