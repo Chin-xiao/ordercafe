@@ -103,6 +103,34 @@ class OrderSessionService
         ];
     }
 
+    public function retrySessionAnnouncement(OrderSession $session): array
+    {
+        return DB::transaction(function () use ($session): array {
+            $lockedSession = OrderSession::query()
+                ->whereKey($session->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $lockedSession || $lockedSession->status !== 'open') {
+                throw ValidationException::withMessages([
+                    'status' => ['Only an open session can retry its announcement.'],
+                ]);
+            }
+
+            if (! $lockedSession->expires_at
+                || $lockedSession->expires_at->lessThanOrEqualTo(Carbon::now('UTC'))) {
+                throw ValidationException::withMessages([
+                    'expires_at' => ['An announcement can only be retried before the session expires.'],
+                ]);
+            }
+
+            return [
+                'session' => $lockedSession,
+                'notifications' => $this->telegramService->retryOrderStartedNotification($lockedSession),
+            ];
+        });
+    }
+
     /**
      * @return array{summary: array, notifications: array}
      */

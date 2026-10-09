@@ -52,6 +52,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::post('/order-sessions/{orderSession}/start', [OrderSessionController::class, 'start']);
     Route::post('/sessions/{orderSession}/start', [OrderSessionController::class, 'start']);
+    Route::post('/order-sessions/{orderSession}/announcement/retry', [OrderSessionController::class, 'retryAnnouncement']);
 
     Route::post('/order-sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
     Route::post('/sessions/{orderSession}/close', [OrderSessionController::class, 'close']);

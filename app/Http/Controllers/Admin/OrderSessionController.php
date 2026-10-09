@@ -121,6 +121,46 @@ class OrderSessionController extends Controller
         ]);
     }
 
+    public function retryAnnouncement(OrderSession $orderSession)
+    {
+        try {
+            $result = $this->sessionService->retrySessionAnnouncement($orderSession);
+        } catch (TelegramDeliveryException $exception) {
+            return response()->json([
+                'message' => 'The session remains open, but the Telegram announcement retry failed.',
+                'session_started' => true,
+                'announcement_sent' => false,
+                'error' => $exception->getMessage(),
+                'data' => $exception->sessionData['session'] ?? $orderSession->fresh(),
+                'telegram_notifications' => $exception->sessionData['notifications'] ?? [],
+            ], 502);
+        }
+
+        if ($result['notifications'] === []) {
+            return response()->json([
+                'message' => 'There are no failed announcement deliveries to retry.',
+                'session_started' => true,
+                'announcement_sent' => false,
+                'data' => $result['session'],
+                'telegram_notifications' => [],
+            ], 409);
+        }
+
+        $failed = collect($result['notifications'])->contains(
+            fn (array $notification) => $notification['status'] === 'failed'
+        );
+
+        return response()->json([
+            'message' => $failed
+                ? 'The session remains open, but one or more announcement retries failed.'
+                : 'The Telegram opening announcement was sent.',
+            'session_started' => true,
+            'announcement_sent' => ! $failed,
+            'data' => $result['session'],
+            'telegram_notifications' => $result['notifications'],
+        ], $failed ? 502 : 200);
+    }
+
     public function close(Request $request, OrderSession $orderSession)
     {
         try {

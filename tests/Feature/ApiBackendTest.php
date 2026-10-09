@@ -319,6 +319,10 @@ class ApiBackendTest extends TestCase
             'services.telegram.bot_token' => 'test-bot-token',
             'services.telegram.mini_app_url' => 'https://ordercafe-front.onrender.com/app',
         ]);
+        Http::fake(['api.telegram.org/*' => Http::response([
+            'ok' => true,
+            'result' => ['message_id' => 988],
+        ])]);
 
         $admin = User::factory()->create(['is_admin' => true]);
         $session = OrderSession::create([
@@ -346,6 +350,28 @@ class ApiBackendTest extends TestCase
         $this->assertDatabaseHas('order_sessions', [
             'id' => $session->id,
             'status' => 'open',
+        ]);
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'message_type' => 'session_opened',
+            'status' => 'failed',
+        ]);
+
+        config(['services.telegram.mini_app_url' => 'https://t.me/ordercafe_bot']);
+        $this->postJson("/api/admin/order-sessions/{$session->id}/announcement/retry", [], $headers)
+            ->assertOk()
+            ->assertJsonPath('session_started', true)
+            ->assertJsonPath('announcement_sent', true);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn (HttpRequest $request) => str_contains(
+            $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? '',
+            'startapp='.$session->id
+        ));
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'telegram_message_id' => 988,
+            'status' => 'sent',
         ]);
     }
 
