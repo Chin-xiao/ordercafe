@@ -57,6 +57,19 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('data.0.name', 'Latte');
     }
 
+    public function test_admin_category_choices_include_drink_and_snacks(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $headers = [
+            'Authorization' => 'Bearer ' . $admin->createToken('test-admin')->plainTextToken,
+        ];
+
+        $this->getJson('/api/admin/categories', $headers)
+            ->assertOk()
+            ->assertJsonFragment(['name' => 'Drink'])
+            ->assertJsonFragment(['name' => 'Snacks']);
+    }
+
     public function test_mini_app_validates_signed_init_data_and_uses_database_prices(): void
     {
         $botToken = 'test-bot-token';
