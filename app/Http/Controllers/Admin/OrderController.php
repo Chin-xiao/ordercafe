@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\OrderSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -75,23 +76,46 @@ class OrderController extends Controller
             });
         }
 
+        $summaryOrders = clone $query;
+        $totalOrders = (clone $summaryOrders)->count();
+        $totalCustomers = (clone $summaryOrders)->distinct('user_id')->count('user_id');
+        $submittedOrders = (clone $summaryOrders)->where('status', 'submitted');
+        $totalSales = (clone $submittedOrders)->sum('total_amount');
+        $totalItems = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->whereIn('orders.id', (clone $submittedOrders)->select('orders.id')->reorder())
+            ->sum('order_items.quantity');
+
         $orders = $query
             ->orderByDesc('submitted_at')
             ->orderByDesc('id')
             ->paginate($validated['per_page'] ?? 15)
             ->through(fn (Order $order) => $this->presentOrder($order));
 
-        return response()->json($orders);
+        return response()->json(array_merge($orders->toArray(), [
+            'summary' => [
+                'total_orders' => $totalOrders,
+                'total_customers' => $totalCustomers,
+                'total_sales' => number_format((float) $totalSales, 2, '.', ''),
+                'total_items' => (int) $totalItems,
+            ],
+        ]));
     }
 
     private function presentOrder(Order $order): array
     {
+        $telegramName = trim(implode(' ', array_filter([
+            $order->user?->first_name,
+            $order->user?->last_name,
+        ])));
+
         return [
             'id' => $order->id,
             'order_number' => $order->order_number,
             'order_session_id' => $order->order_session_id,
             'session_name' => $order->session?->title,
             'telegram_user_id' => $order->user?->telegram_id,
+            'customer_name' => $telegramName ?: $order->user?->name,
             'telegram_username' => $order->user?->username
                 ? '@'.ltrim($order->user->username, '@')
                 : null,

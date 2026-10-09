@@ -11,6 +11,7 @@ use App\Models\TelegramMessage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
@@ -23,6 +24,7 @@ class ApiBackendTest extends TestCase
     public function test_admin_routes_require_a_valid_admin_token(): void
     {
         $this->getJson('/api/admin/dashboard')->assertUnauthorized();
+        $this->getJson('/api/admin/orders')->assertUnauthorized();
 
         $user = User::factory()->create([
             'is_admin' => false,
@@ -210,6 +212,7 @@ class ApiBackendTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.order_number', 'ORD-SEARCH-001')
+            ->assertJsonPath('data.0.customer_name', 'Taylor Customer')
             ->assertJsonPath('data.0.telegram_username', '@taylor_cafe')
             ->assertJsonPath('data.0.telegram_user_id', 456789123)
             ->assertJsonPath('data.0.session_name', 'Afternoon Order')
@@ -230,6 +233,112 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('data.total_orders', 1)
             ->assertJsonPath('data.total_revenue', '8.00')
             ->assertJsonPath('data.product_summary.0.total_quantity', 2);
+    }
+
+    public function test_same_telegram_customer_can_order_again_and_date_range_is_inclusive_in_business_timezone(): void
+    {
+        $botToken = 'test-bot-token';
+        config([
+            'services.telegram.bot_token' => $botToken,
+            'app.business_timezone' => 'Asia/Bangkok',
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $sessions = collect(range(7, 10))->map(fn (int $number) => OrderSession::create([
+            'order_number' => "SESSION-TEST-00{$number}",
+            'title' => "Session {$number}",
+            'status' => 'draft',
+            'created_by' => $admin->id,
+        ]));
+        $product = Product::create([
+            'name' => 'Coffee',
+            'price' => '3.00',
+            'is_available' => true,
+        ]);
+
+        $submitOrder = function (OrderSession $session, int $telegramId, string $name, ?string $username, string $timestamp) use ($botToken, $product): int {
+            $this->travelTo(Carbon::parse($timestamp, 'UTC'));
+            $session->update(['status' => 'open', 'expires_at' => now()->addDay()]);
+            $initData = $this->signedInitData($botToken, [
+                'auth_date' => (string) time(),
+                'user' => json_encode(array_filter([
+                    'id' => $telegramId,
+                    'first_name' => $name,
+                    'username' => $username,
+                ], fn ($value) => $value !== null), JSON_THROW_ON_ERROR),
+            ]);
+
+            $response = $this->postJson('/api/mini-app/orders', [
+                'order_session_id' => $session->id,
+                'items' => [['product_id' => $product->id, 'quantity' => 2]],
+            ], ['X-Telegram-Init-Data' => $initData])->assertCreated();
+
+            $orderId = $response->json('data.id');
+            Order::whereKey($orderId)->update([
+                'created_at' => Carbon::parse($timestamp, 'UTC'),
+                'submitted_at' => Carbon::parse($timestamp, 'UTC'),
+            ]);
+
+            return $orderId;
+        };
+
+        $beforeRange = $submitOrder(
+            $sessions[0],
+            987654321,
+            'First Name',
+            'first_handle',
+            '2026-10-08 16:59:59'
+        );
+        $firstDayBoundary = $submitOrder(
+            $sessions[1],
+            987654321,
+            'Updated Name',
+            'updated_handle',
+            '2026-10-08 17:00:00'
+        );
+        $lastDayBoundary = $submitOrder(
+            $sessions[2],
+            987654321,
+            'Updated Name',
+            'updated_handle',
+            '2026-10-09 16:59:59'
+        );
+        $afterRange = $submitOrder(
+            $sessions[3],
+            987654321,
+            'Updated Name',
+            'updated_handle',
+            '2026-10-09 17:00:00'
+        );
+        $this->travelBack();
+
+        $this->assertSame(1, User::where('telegram_id', 987654321)->count());
+        $this->assertSame(4, Order::whereIn('id', [
+            $beforeRange,
+            $firstDayBoundary,
+            $lastDayBoundary,
+            $afterRange,
+        ])->where('user_id', User::where('telegram_id', 987654321)->value('id'))->count());
+        $this->assertDatabaseHas('users', [
+            'telegram_id' => 987654321,
+            'name' => 'Updated Name',
+            'username' => 'updated_handle',
+        ]);
+
+        $adminHeaders = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+        $this->getJson('/api/admin/orders?date_from=2026-10-09&date_to=2026-10-09&search=987654321&per_page=1', $adminHeaders)
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('summary.total_orders', 2)
+            ->assertJsonPath('summary.total_customers', 1)
+            ->assertJsonPath('summary.total_sales', '12.00')
+            ->assertJsonPath('summary.total_items', 4)
+            ->assertJsonPath('data.0.telegram_user_id', 987654321)
+            ->assertJsonPath('data.0.telegram_username', '@updated_handle')
+            ->assertJsonPath('data.0.customer_name', 'Updated Name')
+            ->assertJsonPath('data.0.first_name', 'Updated Name');
     }
 
     public function test_starting_and_closing_a_session_notifies_verified_telegram_groups(): void
@@ -297,10 +406,12 @@ class ApiBackendTest extends TestCase
 
         Http::assertSentCount(2);
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
-            && str_contains(
-                $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? '',
-                'startapp='.$session->id
-            ));
+            && str_contains($request['text'], 'Order Session: Dinner')
+            && str_contains($request['text'], 'Order Deadline:')
+            && ($request['reply_markup']['inline_keyboard'][0][0] ?? null) === [
+                'text' => '🛒 ORDER NOW',
+                'url' => "https://t.me/ordercafe_bot/order?startapp={$session->id}",
+            ]);
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
             && str_contains($request['text'], 'Iced Coffee × 5')
             && str_contains($request['text'], 'Total amount: $12.50'));
