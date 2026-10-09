@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\OrderSession;
 use App\Services\OrderService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
@@ -24,6 +25,16 @@ class OrderController extends Controller
             'items.*.product_id' => ['required', 'integer', 'distinct', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1', 'max:100'],
         ]);
+
+        $startParam = $request->attributes->get('telegram_web_app_start_param');
+        if ($startParam !== null
+            && (!is_string($startParam)
+                || !ctype_digit($startParam)
+                || (string) $validated['order_session_id'] !== $startParam)) {
+            throw ValidationException::withMessages([
+                'order_session_id' => ['The selected order session does not match this Telegram Mini App link.'],
+            ]);
+        }
 
         $user = $request->user();
 

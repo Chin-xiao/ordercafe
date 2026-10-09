@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\OrderSession;
 use App\Models\TelegramGroup;
+use App\Models\TelegramMessage;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
-use RuntimeException;
+use Illuminate\Support\Facades\Log;
 
 class TelegramService
 {
@@ -19,119 +21,227 @@ class TelegramService
         $this->apiUrl = $this->botToken ? "https://api.telegram.org/bot{$this->botToken}" : '';
     }
 
-    /**
-     * Send order session "OPEN" notification with a Web App button.
-     */
-    public function sendOrderStartedNotification(OrderSession $session): void
+    public function sendOrderStartedNotification(OrderSession $session): array
     {
-        $groups = $this->verifiedGroups();
-
-        $miniAppUrl = config('services.telegram.mini_app_url');
-        if (!is_string($miniAppUrl)
-            || !filter_var($miniAppUrl, FILTER_VALIDATE_URL)
-            || parse_url($miniAppUrl, PHP_URL_SCHEME) !== 'https') {
-            throw new RuntimeException('A valid HTTPS Telegram Mini App URL is not configured.');
+        try {
+            $appUrl = $this->sessionMiniAppUrl($session);
+            $groups = $this->verifiedGroups();
+        } catch (TelegramDeliveryException $exception) {
+            throw new TelegramDeliveryException($exception->getMessage(), [
+                'session' => $session,
+                'notifications' => [],
+            ]);
         }
 
-        $message = "🍔 *CAFE ORDER IS OPEN!*\n\n";
-        $message .= "📋 *{$session->title}*\n";
+        $timezone = config('app.business_timezone');
+        $message = "CAFE ORDER IS NOW OPEN!\n\n";
+        $message .= "Session: {$session->title}\n\n";
+        $message .= ($session->announcement_message ?: 'Please click the button below to view the menu and place your order.') . "\n\n";
+        $message .= 'Order closes at: ' . $session->expires_at
+            ->copy()
+            ->setTimezone($timezone)
+            ->format('l, F j, Y g:i A T') . " ({$timezone})\n\n";
+        $message .= 'Please submit your order before the deadline.';
 
-        if ($session->expires_at) {
-            $message .= "⏰ *Order before:* " . $session->expires_at->format('h:i A') . "\n";
-        }
-
-        $message .= "\nPlease place your order before the deadline! ❤️";
-
-        $replyMarkup = [
-            'inline_keyboard' => [
-                [
+        return $this->sendToGroups(
+            $groups,
+            $session,
+            'session_opened',
+            $message,
+            [
+                'inline_keyboard' => [[
                     [
-                        'text' => '🛒 ORDER NOW',
-                        'web_app' => ['url' => $miniAppUrl]
-                    ]
-                ]
+                        'text' => '🛒 Order Now',
+                        'url' => $appUrl,
+                    ],
+                ]],
             ]
-        ];
-
-        foreach ($groups as $group) {
-            $this->sendMessage($group->telegram_chat_id, $message, $replyMarkup);
-        }
+        );
     }
 
-    /**
-     * Send order session summary when closed by admin.
-     */
-    public function sendOrderSummaryNotification(array $summaryData): void
+    public function sendOrderSummaryNotification(array $summaryData): array
     {
+        /** @var OrderSession $session */
         $session = $summaryData['session'];
-        $groups = $this->verifiedGroups();
+        try {
+            $groups = $this->verifiedGroups();
+        } catch (TelegramDeliveryException $exception) {
+            throw new TelegramDeliveryException($exception->getMessage(), [
+                'summary' => $summaryData,
+                'notifications' => [],
+            ]);
+        }
 
-        $message = "🔴 *CAFE ORDER CLOSED*\n\n";
-        $message .= "📋 *{$session->title}*\n\n";
-        $message .= "👥 *Customers:* {$summaryData['total_customers']}\n";
-        $message .= "🛒 *Orders:* {$summaryData['total_orders']}\n";
-        $message .= "💰 *Total Revenue:* \${$summaryData['total_revenue']}\n\n";
-
-        $message .= "-------------------------\n";
-        $message .= "📦 *PRODUCT SUMMARY*\n\n";
+        $message = "ORDER SESSION CLOSED\n\n";
+        $message .= "Session: {$session->title}\n\n";
+        $message .= "Customers ordered: {$summaryData['total_customers']}\n";
+        $message .= "Total orders: {$summaryData['total_orders']}\n\n";
+        $message .= "Order summary:\n";
 
         foreach ($summaryData['product_summary'] as $item) {
-            $message .= "• {$item['product_name']} × {$item['total_quantity']} (\${$item['subtotal']})\n";
+            $message .= "- {$item['product_name']} × {$item['total_quantity']}\n";
         }
 
-        $message .= "\n-------------------------\n";
-        $message .= "Thank you everyone! ❤️";
+        $message .= "\nTotal amount: \${$summaryData['total_revenue']}\n\nThank you for ordering!";
 
-        foreach ($groups as $group) {
-            $this->sendMessage($group->telegram_chat_id, $message);
-        }
+        return $this->sendToGroups($groups, $session, 'session_closed', $message);
     }
 
-    /**
-     * Low-level helper to hit Telegram sendMessage endpoint.
-     */
-    public function sendMessage(int|string $chatId, string $text, ?array $replyMarkup = null): void
+    public function sendMessage(int|string $chatId, string $text, ?array $replyMarkup = null): int
     {
         if (!$this->botToken) {
-            throw new RuntimeException('Telegram bot token is not configured.');
+            Log::warning('Telegram notification failed: TELEGRAM_BOT_TOKEN is not configured.');
+            throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
 
         $payload = [
             'chat_id' => $chatId,
             'text' => $text,
-            'parse_mode' => 'Markdown',
         ];
 
-        if ($replyMarkup) {
+        if ($replyMarkup !== null) {
             $payload['reply_markup'] = $replyMarkup;
         }
 
         try {
             $response = Http::timeout(10)->post("{$this->apiUrl}/sendMessage", $payload);
         } catch (ConnectionException) {
-            throw new RuntimeException('Could not deliver the Telegram notification.');
+            throw new TelegramDeliveryException('The Telegram API could not be reached.');
         }
 
-        if ($response->failed() || $response->json('ok') !== true) {
-            throw new RuntimeException('Telegram rejected the notification request.');
+        $telegramMessageId = $response->json('result.message_id');
+        if ($response->failed() || $response->json('ok') !== true || !is_numeric($telegramMessageId)) {
+            $errorCode = $response->json('error_code');
+            $description = $response->json('description');
+            $details = is_string($description) && $description !== ''
+                ? ": {$description}"
+                : '';
+            $code = is_numeric($errorCode) ? ", Telegram error {$errorCode}" : '';
+
+            throw new TelegramDeliveryException(
+                "Telegram rejected the message (HTTP {$response->status()}{$code}){$details}"
+            );
         }
+
+        return (int) $telegramMessageId;
     }
 
     private function verifiedGroups()
     {
         if (!$this->botToken) {
-            throw new RuntimeException('Telegram bot token is not configured.');
+            throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
 
-        $groups = TelegramGroup::where('is_active', true)
+        $groups = TelegramGroup::query()
+            ->where('is_active', true)
             ->where('is_verified', true)
             ->whereNotNull('telegram_chat_id')
             ->get();
 
         if ($groups->isEmpty()) {
-            throw new RuntimeException('No verified Telegram group is configured.');
+            Log::warning('Telegram notification skipped: no active verified groups are configured.');
+            throw new TelegramDeliveryException('No active verified Telegram group is configured.');
         }
 
         return $groups;
+    }
+
+    private function sessionMiniAppUrl(OrderSession $session): string
+    {
+        $configuredUrl = config('services.telegram.mini_app_url');
+        $parts = is_string($configuredUrl) ? parse_url($configuredUrl) : false;
+        $host = is_array($parts) ? strtolower($parts['host'] ?? '') : '';
+        $path = trim(is_array($parts) ? ($parts['path'] ?? '') : '', '/');
+
+        if (!is_string($configuredUrl)
+            || !filter_var($configuredUrl, FILTER_VALIDATE_URL)
+            || ($parts['scheme'] ?? null) !== 'https'
+            || !in_array($host, ['t.me', 'telegram.me'], true)
+            || count(explode('/', $path)) < 2) {
+            Log::warning('Telegram Mini App link configuration is invalid.', [
+                'session_id' => $session->id,
+            ]);
+            throw new TelegramDeliveryException(
+                'TELEGRAM_MINI_APP_URL must be the HTTPS Telegram Mini App deep link configured for this bot.'
+            );
+        }
+
+        $query = [];
+        parse_str($parts['query'] ?? '', $query);
+        $query['startapp'] = (string) $session->id;
+
+        return ($parts['scheme'] . '://' . $parts['host']
+            . ($parts['port'] ?? null ? ':' . $parts['port'] : '')
+            . ($parts['path'] ?? ''))
+            . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986)
+            . (isset($parts['fragment']) ? '#' . $parts['fragment'] : '');
+    }
+
+    private function sendToGroups(
+        iterable $groups,
+        OrderSession $session,
+        string $messageType,
+        string $text,
+        ?array $replyMarkup = null
+    ): array {
+        $results = [];
+
+        foreach ($groups as $group) {
+            $alreadySent = TelegramMessage::query()
+                ->where('telegram_group_id', $group->id)
+                ->where('order_session_id', $session->id)
+                ->where('message_type', $messageType)
+                ->where('status', 'sent')
+                ->exists();
+
+            if ($alreadySent) {
+                $results[] = [
+                    'telegram_group_id' => $group->id,
+                    'status' => 'already_sent',
+                ];
+                continue;
+            }
+
+            $delivery = TelegramMessage::create([
+                'telegram_group_id' => $group->id,
+                'order_session_id' => $session->id,
+                'message_type' => $messageType,
+                'telegram_chat_id' => $group->telegram_chat_id,
+                'status' => 'pending',
+            ]);
+
+            try {
+                $messageId = $this->sendMessage($group->telegram_chat_id, $text, $replyMarkup);
+                $delivery->update([
+                    'telegram_message_id' => $messageId,
+                    'status' => 'sent',
+                    'sent_at' => Carbon::now('UTC'),
+                ]);
+                $results[] = [
+                    'telegram_group_id' => $group->id,
+                    'status' => 'sent',
+                    'telegram_message_id' => $messageId,
+                ];
+            } catch (TelegramDeliveryException $exception) {
+                $delivery->update([
+                    'status' => 'failed',
+                    'error_message' => $exception->getMessage(),
+                ]);
+                Log::warning('Telegram notification delivery failed.', [
+                    'session_id' => $session->id,
+                    'telegram_group_id' => $group->id,
+                    'telegram_chat_id' => $group->telegram_chat_id,
+                    'message_type' => $messageType,
+                    'error' => $exception->getMessage(),
+                ]);
+                $results[] = [
+                    'telegram_group_id' => $group->id,
+                    'status' => 'failed',
+                    'error' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return $results;
     }
 }

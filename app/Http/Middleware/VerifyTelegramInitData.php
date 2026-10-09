@@ -28,13 +28,16 @@ class VerifyTelegramInitData
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
-        $userData = $this->validateAndParseInitData($initData, $botToken);
+        $validatedData = $this->validateAndParseInitData($initData, $botToken);
 
-        if (!$userData || !isset($userData['id'])) {
+        if (!$validatedData || !isset($validatedData['user']['id'])) {
             return response()->json([
                 'message' => 'Unauthorized: Invalid Telegram signature or expired data.'
             ], Response::HTTP_UNAUTHORIZED);
         }
+
+        $userData = $validatedData['user'];
+        $request->attributes->set('telegram_web_app_start_param', $validatedData['start_param']);
 
         $user = User::firstOrCreate(
             ['telegram_id' => $userData['id']],
@@ -113,6 +116,9 @@ class VerifyTelegramInitData
             return null;
         }
 
-        return $userJson;
+        return [
+            'user' => $userJson,
+            'start_param' => $params['start_param'] ?? null,
+        ];
     }
 }

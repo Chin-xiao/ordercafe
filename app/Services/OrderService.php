@@ -22,7 +22,8 @@ class OrderService
      */
     public function submitOrder(User $user, array $data): Order
     {
-        return DB::transaction(function () use ($user, $data) {
+        $sessionExpired = false;
+        $order = DB::transaction(function () use ($user, $data, &$sessionExpired) {
             // 1. Find and lock the order session to prevent race conditions
             $session = OrderSession::where('id', $data['order_session_id'])
                 ->lockForUpdate()
@@ -42,13 +43,11 @@ class OrderService
             }
 
             // 3. Verify session expiration time
-            if ($session->expires_at && Carbon::now()->greaterThan($session->expires_at)) {
-                // Automatically mark as expired if time has passed
+            if (!$session->expires_at
+                || $session->expires_at->lessThanOrEqualTo(Carbon::now('UTC'))) {
                 $session->update(['status' => 'expired']);
-
-                throw ValidationException::withMessages([
-                    'order_session_id' => ['The time window for this order session has expired.'],
-                ]);
+                $sessionExpired = true;
+                return null;
             }
 
             // 4. Verify user doesn't already have an order in this session (Enforces unique constraint)
@@ -130,5 +129,13 @@ class OrderService
 
             return $order->load('items', 'session');
         });
+
+        if ($sessionExpired) {
+            throw ValidationException::withMessages([
+                'order_session_id' => ['The time window for this order session has expired.'],
+            ]);
+        }
+
+        return $order;
     }
 }

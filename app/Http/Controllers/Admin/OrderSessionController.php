@@ -4,8 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\OrderSession;
+use App\Services\TelegramDeliveryException;
 use App\Services\OrderSessionService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Validator;
 
 class OrderSessionController extends Controller
 {
@@ -27,12 +30,47 @@ class OrderSessionController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validator = Validator::make($request->all(), [
             'title' => ['required', 'string', 'max:255'],
-            'expires_at' => ['nullable', 'date', 'after:now'],
+            'scheduled_start_at' => ['nullable', 'date'],
+            'expires_at' => ['nullable', 'date'],
+            'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:10080'],
+            'announcement_message' => ['nullable', 'string', 'max:3000'],
         ]);
+        $validator->after(function ($validator) use ($request): void {
+            $hasExpiration = $request->filled('expires_at');
+            $hasDuration = $request->filled('duration_minutes');
 
-        $session = $this->sessionService->createSession($request->user(), $request->all());
+            if ($hasExpiration === $hasDuration) {
+                $validator->errors()->add(
+                    'expires_at',
+                    'Provide either an expiration date/time or a duration in minutes.'
+                );
+            }
+
+            if ($hasExpiration && !$validator->errors()->has('expires_at')) {
+                $expiresAt = Carbon::parse(
+                    $request->input('expires_at'),
+                    config('app.business_timezone')
+                )->utc();
+
+                if ($expiresAt->lessThanOrEqualTo(now('UTC'))) {
+                    $validator->errors()->add('expires_at', 'The expiration must be in the future.');
+                }
+            }
+        });
+        $validated = $validator->validate();
+
+        foreach (['scheduled_start_at', 'expires_at'] as $dateField) {
+            if (!empty($validated[$dateField])) {
+                $validated[$dateField] = Carbon::parse(
+                    $validated[$dateField],
+                    config('app.business_timezone')
+                )->utc();
+            }
+        }
+
+        $session = $this->sessionService->createSession($request->user(), $validated);
 
         return response()->json([
             'message' => 'Order session created successfully as draft.',
@@ -49,21 +87,41 @@ class OrderSessionController extends Controller
 
     public function start(OrderSession $orderSession)
     {
-        $session = $this->sessionService->startSession($orderSession);
+        try {
+            $result = $this->sessionService->startSession($orderSession);
+        } catch (TelegramDeliveryException $exception) {
+            return response()->json([
+                'message' => 'The session is open, but the Telegram announcement could not be delivered.',
+                'error' => $exception->getMessage(),
+                'data' => $exception->sessionData['session'] ?? null,
+                'telegram_notifications' => $exception->sessionData['notifications'] ?? [],
+            ], 502);
+        }
 
         return response()->json([
-            'message' => 'Order session is now open!',
-            'data' => $session
+            'message' => 'Order session is now open and the Telegram announcement was sent.',
+            'data' => $result['session'],
+            'telegram_notifications' => $result['notifications'],
         ]);
     }
 
     public function close(Request $request, OrderSession $orderSession)
     {
-        $summary = $this->sessionService->closeSession($orderSession, $request->user());
+        try {
+            $result = $this->sessionService->closeSession($orderSession, $request->user());
+        } catch (TelegramDeliveryException $exception) {
+            return response()->json([
+                'message' => 'The session is closed, but its Telegram summary could not be delivered.',
+                'error' => $exception->getMessage(),
+                'summary' => $exception->sessionData['summary'] ?? null,
+                'telegram_notifications' => $exception->sessionData['notifications'] ?? [],
+            ], 502);
+        }
 
         return response()->json([
-            'message' => 'Order session closed successfully.',
-            'summary' => $summary
+            'message' => 'Order session closed and the Telegram summary was sent.',
+            'summary' => $result['summary'],
+            'telegram_notifications' => $result['notifications'],
         ]);
     }
 }

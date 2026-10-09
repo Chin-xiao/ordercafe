@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Models\Product;
 use App\Models\TelegramGroup;
 use App\Models\User;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Hash;
@@ -81,6 +83,7 @@ class ApiBackendTest extends TestCase
             'title' => 'Lunch',
             'status' => 'open',
             'started_at' => now(),
+            'expires_at' => now()->addHour(),
             'created_by' => $admin->id,
         ]);
         $product = Product::create([
@@ -129,6 +132,33 @@ class ApiBackendTest extends TestCase
         ])->assertUnauthorized();
     }
 
+    public function test_mini_app_resolves_the_session_from_signed_telegram_start_param(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-005',
+            'title' => 'Mini App Lunch',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'start_param' => (string) $session->id,
+            'user' => json_encode(['id' => 12345678, 'first_name' => 'Test'], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->getJson('/api/mini-app/order-session/current', [
+            'X-Telegram-Init-Data' => $initData,
+        ])->assertOk()
+            ->assertJsonPath('data.id', $session->id)
+            ->assertJsonPath('data.can_order', true);
+    }
+
     public function test_cors_allows_the_configured_render_frontend_origin(): void
     {
         $this->call('OPTIONS', '/api/admin/products', server: [
@@ -142,16 +172,36 @@ class ApiBackendTest extends TestCase
     {
         config([
             'services.telegram.bot_token' => 'test-bot-token',
-            'services.telegram.mini_app_url' => 'https://ordercafe-front.onrender.com/app',
+            'services.telegram.mini_app_url' => 'https://t.me/ordercafe_bot/order',
         ]);
-        Http::fake(['api.telegram.org/*' => Http::response(['ok' => true])]);
+        Http::fake(['api.telegram.org/*' => Http::response([
+            'ok' => true,
+            'result' => ['message_id' => 987],
+        ])]);
 
         $admin = User::factory()->create(['is_admin' => true]);
         $session = OrderSession::create([
             'order_number' => 'SESSION-TEST-002',
             'title' => 'Dinner',
+            'expires_at' => now()->addHour(),
             'status' => 'draft',
             'created_by' => $admin->id,
+        ]);
+        $customer = User::factory()->create(['name' => 'Cafe Customer']);
+        $order = Order::create([
+            'order_number' => 'ORD-TEST-001',
+            'order_session_id' => $session->id,
+            'user_id' => $customer->id,
+            'total_amount' => '12.50',
+            'status' => 'submitted',
+            'submitted_at' => now(),
+        ]);
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_name' => 'Iced Coffee',
+            'unit_price' => '2.50',
+            'quantity' => 5,
+            'subtotal' => '12.50',
         ]);
         TelegramGroup::create([
             'telegram_chat_id' => -100123456789,
@@ -166,12 +216,111 @@ class ApiBackendTest extends TestCase
         ];
 
         $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath('data.status', 'open');
         $this->postJson("/api/admin/order-sessions/{$session->id}/close", [], $headers)
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath('summary.total_orders', 1)
+            ->assertJsonPath('summary.total_customers', 1)
+            ->assertJsonPath('summary.total_revenue', '12.50')
+            ->assertJsonPath('summary.product_summary.0.total_quantity', 5);
 
         Http::assertSentCount(2);
-        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789);
+        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
+            && str_contains(
+                $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? '',
+                'startapp=' . $session->id
+            ));
+        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
+            && str_contains($request['text'], 'Iced Coffee × 5')
+            && str_contains($request['text'], 'Total amount: $12.50'));
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'telegram_chat_id' => -100123456789,
+            'telegram_message_id' => 987,
+            'status' => 'sent',
+        ]);
+        $this->assertSame(2, \App\Models\TelegramMessage::where('order_session_id', $session->id)->count());
+    }
+
+    public function test_starting_a_session_reports_invalid_mini_app_link_without_rolling_back_session(): void
+    {
+        config([
+            'services.telegram.bot_token' => 'test-bot-token',
+            'services.telegram.mini_app_url' => 'https://ordercafe-front.onrender.com/app',
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-003',
+            'title' => 'Breakfast',
+            'expires_at' => now()->addHour(),
+            'status' => 'draft',
+            'created_by' => $admin->id,
+        ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456789,
+            'title' => 'Cafe Group',
+            'group_name' => 'Cafe Group',
+            'verify_token' => 'CAFE-TEST-TOKEN-2',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer ' . $admin->createToken('test-admin')->plainTextToken,
+        ];
+
+        $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)
+            ->assertStatus(502)
+            ->assertJsonPath('data.status', 'open');
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $session->id,
+            'status' => 'open',
+        ]);
+    }
+
+    public function test_expiration_command_and_submission_reject_orders_after_deadline(): void
+    {
+        config(['services.telegram.bot_token' => 'test-bot-token']);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-004',
+            'title' => 'Expired Lunch',
+            'status' => 'open',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subSecond(),
+            'created_by' => $admin->id,
+        ]);
+
+        Artisan::call('order-sessions:expire');
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $session->id,
+            'status' => 'expired',
+        ]);
+
+        $session->update(['status' => 'open']);
+        $product = Product::create([
+            'name' => 'Tea',
+            'price' => '2.00',
+            'is_available' => true,
+        ]);
+        $initData = $this->signedInitData('test-bot-token', [
+            'auth_date' => (string) time(),
+            'query_id' => 'AAEAAAE',
+            'user' => json_encode(['id' => 7654321, 'first_name' => 'Test'], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $session->id,
+            'items' => [['product_id' => $product->id, 'quantity' => 1]],
+        ], ['X-Telegram-Init-Data' => $initData])->assertUnprocessable();
+
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $session->id,
+            'status' => 'expired',
+        ]);
+        $this->assertDatabaseCount('orders', 0);
     }
 
     private function signedInitData(string $botToken, array $params): string

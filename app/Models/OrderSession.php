@@ -9,6 +9,9 @@ class OrderSession extends Model
     protected $fillable = [
         'order_number',
         'title',
+        'scheduled_start_at',
+        'duration_minutes',
+        'announcement_message',
         'started_at',
         'expires_at',
         'closed_at',
@@ -19,8 +22,10 @@ class OrderSession extends Model
 
     protected $casts = [
         'started_at' => 'datetime',
+        'scheduled_start_at' => 'datetime',
         'expires_at' => 'datetime',
         'closed_at' => 'datetime',
+        'duration_minutes' => 'integer',
     ];
 
     public function orders()
