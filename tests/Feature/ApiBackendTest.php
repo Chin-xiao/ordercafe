@@ -7,10 +7,11 @@ use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Models\Product;
 use App\Models\TelegramGroup;
+use App\Models\TelegramMessage;
 use App\Models\User;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -63,7 +64,7 @@ class ApiBackendTest extends TestCase
     {
         $admin = User::factory()->create(['is_admin' => true]);
         $headers = [
-            'Authorization' => 'Bearer ' . $admin->createToken('test-admin')->plainTextToken,
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
         ];
 
         $this->getJson('/api/admin/categories', $headers)
@@ -116,6 +117,8 @@ class ApiBackendTest extends TestCase
         $this->assertSame('7.50', $order->total_amount);
         $this->assertSame('2.50', $order->items->first()->unit_price);
         $this->assertSame(123456789, $order->user->telegram_id);
+        $this->assertSame('cafe_customer', $order->user->username);
+        $this->assertSame('Cafe', $order->user->first_name);
         $this->assertDatabaseHas('users', [
             'telegram_id' => 123456789,
             'email' => 'telegram123456789@users.invalid',
@@ -128,7 +131,7 @@ class ApiBackendTest extends TestCase
         config(['services.telegram.bot_token' => 'test-bot-token']);
 
         $this->getJson('/api/mini-app/products', [
-            'X-Telegram-Init-Data' => 'auth_date=' . (time() - 90000) . '&user=%7B%22id%22%3A1%7D&hash=' . str_repeat('a', 64),
+            'X-Telegram-Init-Data' => 'auth_date='.(time() - 90000).'&user=%7B%22id%22%3A1%7D&hash='.str_repeat('a', 64),
         ])->assertUnauthorized();
     }
 
@@ -166,6 +169,67 @@ class ApiBackendTest extends TestCase
             'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST',
         ])->assertNoContent()
             ->assertHeader('access-control-allow-origin', 'https://ordercafe-front.onrender.com');
+    }
+
+    public function test_admin_can_search_and_view_orders_and_session_summary(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $customer = User::factory()->create([
+            'name' => 'Taylor Customer',
+            'telegram_id' => 456789123,
+            'username' => 'taylor_cafe',
+            'first_name' => 'Taylor',
+            'last_name' => 'Customer',
+        ]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-006',
+            'title' => 'Afternoon Order',
+            'status' => 'closed',
+            'created_by' => $admin->id,
+        ]);
+        $order = Order::create([
+            'order_number' => 'ORD-SEARCH-001',
+            'order_session_id' => $session->id,
+            'user_id' => $customer->id,
+            'total_amount' => '8.00',
+            'status' => 'submitted',
+            'submitted_at' => now(),
+        ]);
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_name' => 'Matcha Latte',
+            'unit_price' => '4.00',
+            'quantity' => 2,
+            'subtotal' => '8.00',
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+
+        $this->getJson('/api/admin/orders?search=taylor_cafe&order_session_id='.$session->id, $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.order_number', 'ORD-SEARCH-001')
+            ->assertJsonPath('data.0.telegram_username', '@taylor_cafe')
+            ->assertJsonPath('data.0.telegram_user_id', 456789123)
+            ->assertJsonPath('data.0.session_name', 'Afternoon Order')
+            ->assertJsonPath('data.0.items.0.quantity', 2);
+
+        $this->getJson('/api/admin/order-sessions/'.$session->id.'/orders?search=456789123', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1);
+
+        $this->getJson('/api/admin/orders/'.$order->id, $headers)
+            ->assertOk()
+            ->assertJsonPath('data.items.0.product_name', 'Matcha Latte')
+            ->assertJsonMissingPath('data.user.email');
+
+        $this->getJson('/api/admin/order-sessions/'.$session->id.'/summary', $headers)
+            ->assertOk()
+            ->assertJsonPath('data.total_customers', 1)
+            ->assertJsonPath('data.total_orders', 1)
+            ->assertJsonPath('data.total_revenue', '8.00')
+            ->assertJsonPath('data.product_summary.0.total_quantity', 2);
     }
 
     public function test_starting_and_closing_a_session_notifies_verified_telegram_groups(): void
@@ -212,14 +276,20 @@ class ApiBackendTest extends TestCase
             'is_active' => true,
         ]);
         $headers = [
-            'Authorization' => 'Bearer ' . $admin->createToken('test-admin')->plainTextToken,
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
         ];
 
         $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)
             ->assertOk()
+            ->assertJsonPath('session_started', true)
+            ->assertJsonPath('announcement_sent', true)
             ->assertJsonPath('data.status', 'open');
+        $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)
+            ->assertUnprocessable();
         $this->postJson("/api/admin/order-sessions/{$session->id}/close", [], $headers)
             ->assertOk()
+            ->assertJsonPath('session_closed', true)
+            ->assertJsonPath('summary_sent', true)
             ->assertJsonPath('summary.total_orders', 1)
             ->assertJsonPath('summary.total_customers', 1)
             ->assertJsonPath('summary.total_revenue', '12.50')
@@ -229,7 +299,7 @@ class ApiBackendTest extends TestCase
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
             && str_contains(
                 $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? '',
-                'startapp=' . $session->id
+                'startapp='.$session->id
             ));
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
             && str_contains($request['text'], 'Iced Coffee × 5')
@@ -240,7 +310,7 @@ class ApiBackendTest extends TestCase
             'telegram_message_id' => 987,
             'status' => 'sent',
         ]);
-        $this->assertSame(2, \App\Models\TelegramMessage::where('order_session_id', $session->id)->count());
+        $this->assertSame(2, TelegramMessage::where('order_session_id', $session->id)->count());
     }
 
     public function test_starting_a_session_reports_invalid_mini_app_link_without_rolling_back_session(): void
@@ -267,7 +337,7 @@ class ApiBackendTest extends TestCase
             'is_active' => true,
         ]);
         $headers = [
-            'Authorization' => 'Bearer ' . $admin->createToken('test-admin')->plainTextToken,
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
         ];
 
         $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)

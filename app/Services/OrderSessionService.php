@@ -10,14 +10,12 @@ use Illuminate\Validation\ValidationException;
 
 class OrderSessionService
 {
-    public function __construct(private TelegramService $telegramService)
-    {
-    }
+    public function __construct(private TelegramService $telegramService) {}
 
     public function createSession(User $admin, array $data): OrderSession
     {
         return OrderSession::create([
-            'order_number' => 'SESSION-' . Carbon::now('UTC')->format('Ymd') . '-' . str_pad(
+            'order_number' => 'SESSION-'.Carbon::now('UTC')->format('Ymd').'-'.str_pad(
                 (string) random_int(1, 999),
                 3,
                 '0',
@@ -45,7 +43,7 @@ class OrderSessionService
                 ->get();
             $lockedSession = $lockedSessions->firstWhere('id', $session->id);
 
-            if (!$lockedSession || $lockedSession->status !== 'draft') {
+            if (! $lockedSession || $lockedSession->status !== 'draft') {
                 throw ValidationException::withMessages([
                     'status' => ['Only draft sessions can be started.'],
                 ]);
@@ -61,7 +59,7 @@ class OrderSessionService
             $now = Carbon::now('UTC');
             foreach ($lockedSessions as $candidate) {
                 if ($candidate->status === 'open'
-                    && (!$candidate->expires_at || $candidate->expires_at->lessThanOrEqualTo($now))) {
+                    && (! $candidate->expires_at || $candidate->expires_at->lessThanOrEqualTo($now))) {
                     $candidate->update(['status' => 'expired']);
                 }
             }
@@ -78,7 +76,7 @@ class OrderSessionService
                     ? $startedAt->copy()->addMinutes($lockedSession->duration_minutes)
                     : null);
 
-            if (!$expiresAt || $expiresAt->lessThanOrEqualTo($startedAt)) {
+            if (! $expiresAt || $expiresAt->lessThanOrEqualTo($startedAt)) {
                 throw ValidationException::withMessages([
                     'expires_at' => ['The session must have a future expiration time or duration.'],
                 ]);
@@ -116,7 +114,7 @@ class OrderSessionService
                 ->lockForUpdate()
                 ->first();
 
-            if (!$lockedSession || $lockedSession->status !== 'open') {
+            if (! $lockedSession || $lockedSession->status !== 'open') {
                 throw ValidationException::withMessages([
                     'status' => ['This session is not currently open.'],
                 ]);
@@ -128,47 +126,7 @@ class OrderSessionService
                 'closed_by' => $admin->id,
             ]);
 
-            $orders = $lockedSession->orders()
-                ->where('status', 'submitted')
-                ->with('items')
-                ->get();
-            $productSummary = [];
-
-            foreach ($orders as $order) {
-                foreach ($order->items as $item) {
-                    $key = ($item->product_id ?? $item->product_name) . ':' . $item->unit_price;
-                    if (!isset($productSummary[$key])) {
-                        $productSummary[$key] = [
-                            'product_name' => $item->product_name,
-                            'unit_price' => $item->unit_price,
-                            'total_quantity' => 0,
-                            'subtotal' => '0.00',
-                            'subtotal_cents' => 0,
-                        ];
-                    }
-
-                    $productSummary[$key]['total_quantity'] += $item->quantity;
-                    $productSummary[$key]['subtotal_cents'] += (int) round((float) $item->subtotal * 100);
-                }
-            }
-
-            foreach ($productSummary as &$item) {
-                $item['subtotal'] = number_format($item['subtotal_cents'] / 100, 2, '.', '');
-                unset($item['subtotal_cents']);
-            }
-            unset($item);
-
-            $totalRevenueCents = $orders->sum(
-                fn ($order) => (int) round((float) $order->total_amount * 100)
-            );
-
-            return [
-                'session' => $lockedSession->fresh(),
-                'total_customers' => $orders->pluck('user_id')->unique()->count(),
-                'total_orders' => $orders->count(),
-                'total_revenue' => number_format($totalRevenueCents / 100, 2, '.', ''),
-                'product_summary' => array_values($productSummary),
-            ];
+            return $this->sessionSummary($lockedSession->fresh());
         });
 
         $notifications = $this->telegramService->sendOrderSummaryNotification($summary);
@@ -192,6 +150,38 @@ class OrderSessionService
                     ->orWhere('expires_at', '<=', Carbon::now('UTC'));
             })
             ->update(['status' => 'expired']);
+    }
+
+    public function sessionSummary(OrderSession $session): array
+    {
+        $orders = $session->orders()->where('status', 'submitted');
+        $orderCount = (clone $orders)->count();
+        $customerCount = (clone $orders)->distinct('user_id')->count('user_id');
+        $totalRevenue = (clone $orders)->sum('total_amount');
+        $productSummary = $session->orders()
+            ->where('orders.status', 'submitted')
+            ->join('order_items', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw(
+                'order_items.product_name, order_items.unit_price, SUM(order_items.quantity) as total_quantity, SUM(order_items.subtotal) as subtotal'
+            )
+            ->groupBy('order_items.product_name', 'order_items.unit_price')
+            ->orderBy('order_items.product_name')
+            ->get()
+            ->map(fn ($item) => [
+                'product_name' => $item->product_name,
+                'unit_price' => number_format((float) $item->unit_price, 2, '.', ''),
+                'total_quantity' => (int) $item->total_quantity,
+                'subtotal' => number_format((float) $item->subtotal, 2, '.', ''),
+            ])
+            ->all();
+
+        return [
+            'session' => $session,
+            'total_customers' => $customerCount,
+            'total_orders' => $orderCount,
+            'total_revenue' => number_format((float) $totalRevenue, 2, '.', ''),
+            'product_summary' => $productSummary,
+        ];
     }
 
     private function throwIfDeliveryFailed(array $notifications, array $sessionData): void

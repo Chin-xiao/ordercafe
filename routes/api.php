@@ -1,7 +1,8 @@
 <?php
 
-use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Admin\OrderController as AdminOrderController;
+use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\ProductController as AdminProductController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\TelegramSettingsController;
@@ -54,6 +55,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::post('/order-sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
     Route::post('/sessions/{orderSession}/close', [OrderSessionController::class, 'close']);
+    Route::get('/order-sessions/{orderSession}/orders', [AdminOrderController::class, 'forSession']);
+    Route::get('/order-sessions/{orderSession}/summary', [OrderSessionController::class, 'summary']);
+    Route::get('/orders', [AdminOrderController::class, 'index']);
+    Route::get('/orders/{order}', [AdminOrderController::class, 'show']);
 
     Route::post('/register', [AuthController::class, 'register']);
 

@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Middleware;
 
 use App\Models\User;
@@ -14,25 +15,25 @@ class VerifyTelegramInitData
     {
         $initData = $request->header('X-Telegram-Init-Data') ?: $request->input('init_data');
 
-        if (!is_string($initData) || $initData === '') {
+        if (! is_string($initData) || $initData === '') {
             return response()->json([
-                'message' => 'Unauthorized: Missing Telegram initialization data.'
+                'message' => 'Unauthorized: Missing Telegram initialization data.',
             ], Response::HTTP_UNAUTHORIZED);
         }
 
         $botToken = config('services.telegram.bot_token');
 
-        if (!$botToken) {
+        if (! $botToken) {
             return response()->json([
-                'message' => 'Server configuration error: Telegram bot token not set.'
+                'message' => 'Server configuration error: Telegram bot token not set.',
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
         $validatedData = $this->validateAndParseInitData($initData, $botToken);
 
-        if (!$validatedData || !isset($validatedData['user']['id'])) {
+        if (! $validatedData || ! isset($validatedData['user']['id'])) {
             return response()->json([
-                'message' => 'Unauthorized: Invalid Telegram signature or expired data.'
+                'message' => 'Unauthorized: Invalid Telegram signature or expired data.',
             ], Response::HTTP_UNAUTHORIZED);
         }
 
@@ -43,7 +44,7 @@ class VerifyTelegramInitData
             ['telegram_id' => $userData['id']],
             [
                 'name' => $userData['first_name'] ?? $userData['username'] ?? 'Telegram user',
-                'email' => 'telegram' . $userData['id'] . '@users.invalid',
+                'email' => 'telegram'.$userData['id'].'@users.invalid',
                 'password' => Hash::make(Str::random(64)),
                 'username' => $userData['username'] ?? null,
                 'first_name' => $userData['first_name'] ?? null,
@@ -53,20 +54,24 @@ class VerifyTelegramInitData
             ]
         );
 
-        if (!$user->is_active) {
+        if (! $user->is_active) {
             return response()->json([
-                'message' => 'Forbidden: Your account has been disabled.'
+                'message' => 'Forbidden: Your account has been disabled.',
             ], Response::HTTP_FORBIDDEN);
         }
 
-        $profile = array_filter([
+        $profile = [
+            'name' => trim(implode(' ', array_filter([
+                $userData['first_name'] ?? null,
+                $userData['last_name'] ?? null,
+            ]))) ?: ($userData['username'] ?? $user->name),
             'username' => $userData['username'] ?? null,
             'first_name' => $userData['first_name'] ?? null,
             'last_name' => $userData['last_name'] ?? null,
-        ], fn ($value) => $value !== null);
+        ];
         $user->fill($profile)->save();
 
-        $request->setUserResolver(fn() => $user);
+        $request->setUserResolver(fn () => $user);
 
         return $next($request);
     }
@@ -80,10 +85,10 @@ class VerifyTelegramInitData
     {
         parse_str($initData, $params);
 
-        if (!isset($params['hash'], $params['auth_date'], $params['user'])
-            || !is_string($params['hash'])
-            || !preg_match('/^[a-f0-9]{64}$/i', $params['hash'])
-            || !ctype_digit((string) $params['auth_date'])) {
+        if (! isset($params['hash'], $params['auth_date'], $params['user'])
+            || ! is_string($params['hash'])
+            || ! preg_match('/^[a-f0-9]{64}$/i', $params['hash'])
+            || ! ctype_digit((string) $params['auth_date'])) {
             return null;
         }
 
@@ -99,7 +104,7 @@ class VerifyTelegramInitData
         $secretKey = hash_hmac('sha256', $botToken, 'WebAppData', true);
         $calculatedHash = hash_hmac('sha256', $dataCheckString, $secretKey);
 
-        if (!hash_equals($calculatedHash, $receivedHash)) {
+        if (! hash_equals($calculatedHash, $receivedHash)) {
             return null;
         }
 
@@ -110,9 +115,9 @@ class VerifyTelegramInitData
 
         $userJson = json_decode($params['user'], true);
 
-        if (!is_array($userJson)
-            || !isset($userJson['id'])
-            || !ctype_digit((string) $userJson['id'])) {
+        if (! is_array($userJson)
+            || ! isset($userJson['id'])
+            || ! ctype_digit((string) $userJson['id'])) {
             return null;
         }
 

@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 class TelegramService
 {
     protected ?string $botToken;
+
     protected string $apiUrl;
 
     public function __construct()
@@ -34,14 +35,18 @@ class TelegramService
         }
 
         $timezone = config('app.business_timezone');
-        $message = "CAFE ORDER IS NOW OPEN!\n\n";
-        $message .= "Session: {$session->title}\n\n";
-        $message .= ($session->announcement_message ?: 'Please click the button below to view the menu and place your order.') . "\n\n";
-        $message .= 'Order closes at: ' . $session->expires_at
+        $message = "🍽️ CAFE ORDER IS NOW OPEN!\n\n";
+        $message .= "📢 You can order now!\n\n";
+        $message .= "📝 Order Session: {$session->title}\n\n";
+        $message .= '⏰ Order Deadline: '.$session->expires_at
             ->copy()
             ->setTimezone($timezone)
-            ->format('l, F j, Y g:i A T') . " ({$timezone})\n\n";
-        $message .= 'Please submit your order before the deadline.';
+            ->format('l, F j, Y g:i A T')." ({$timezone})\n\n";
+        $message .= ($session->announcement_message
+            ?: 'Please open the Mini App, choose your favorite drinks and food, and submit your order before the deadline.')
+            ."\n\n";
+        $message .= "👇 Click the button below to order now!\n\n";
+        $message .= 'Thank you!';
 
         return $this->sendToGroups(
             $groups,
@@ -51,7 +56,7 @@ class TelegramService
             [
                 'inline_keyboard' => [[
                     [
-                        'text' => '🛒 Order Now',
+                        'text' => '🛒 ORDER NOW',
                         'url' => $appUrl,
                     ],
                 ]],
@@ -89,7 +94,7 @@ class TelegramService
 
     public function sendMessage(int|string $chatId, string $text, ?array $replyMarkup = null): int
     {
-        if (!$this->botToken) {
+        if (! $this->botToken) {
             Log::warning('Telegram notification failed: TELEGRAM_BOT_TOKEN is not configured.');
             throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
@@ -110,7 +115,7 @@ class TelegramService
         }
 
         $telegramMessageId = $response->json('result.message_id');
-        if ($response->failed() || $response->json('ok') !== true || !is_numeric($telegramMessageId)) {
+        if ($response->failed() || $response->json('ok') !== true || ! is_numeric($telegramMessageId)) {
             $errorCode = $response->json('error_code');
             $description = $response->json('description');
             $details = is_string($description) && $description !== ''
@@ -128,7 +133,7 @@ class TelegramService
 
     private function verifiedGroups()
     {
-        if (!$this->botToken) {
+        if (! $this->botToken) {
             throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
 
@@ -153,10 +158,10 @@ class TelegramService
         $host = is_array($parts) ? strtolower($parts['host'] ?? '') : '';
         $path = trim(is_array($parts) ? ($parts['path'] ?? '') : '', '/');
 
-        if (!is_string($configuredUrl)
-            || !filter_var($configuredUrl, FILTER_VALIDATE_URL)
+        if (! is_string($configuredUrl)
+            || ! filter_var($configuredUrl, FILTER_VALIDATE_URL)
             || ($parts['scheme'] ?? null) !== 'https'
-            || !in_array($host, ['t.me', 'telegram.me'], true)
+            || ! in_array($host, ['t.me', 'telegram.me'], true)
             || count(explode('/', $path)) < 2) {
             Log::warning('Telegram Mini App link configuration is invalid.', [
                 'session_id' => $session->id,
@@ -170,11 +175,11 @@ class TelegramService
         parse_str($parts['query'] ?? '', $query);
         $query['startapp'] = (string) $session->id;
 
-        return ($parts['scheme'] . '://' . $parts['host']
-            . ($parts['port'] ?? null ? ':' . $parts['port'] : '')
-            . ($parts['path'] ?? ''))
-            . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986)
-            . (isset($parts['fragment']) ? '#' . $parts['fragment'] : '');
+        return ($parts['scheme'].'://'.$parts['host']
+            .($parts['port'] ?? null ? ':'.$parts['port'] : '')
+            .($parts['path'] ?? ''))
+            .'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986)
+            .(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
     }
 
     private function sendToGroups(
@@ -199,6 +204,7 @@ class TelegramService
                     'telegram_group_id' => $group->id,
                     'status' => 'already_sent',
                 ];
+
                 continue;
             }
 
