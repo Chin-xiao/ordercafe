@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd
 
 # Enable Apache mod_rewrite for Laravel routing
-RUN a2enmod rewrite
+RUN a2enmod rewrite \
+    && echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -47,5 +48,4 @@ CMD php artisan config:clear && \
     php artisan route:cache && \
     php artisan migrate --force && \
     apache2-foreground
-
 
