@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Admin\CustomerController as AdminCustomerController;
 use App\Http\Controllers\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\ProductController as AdminProductController;
@@ -60,6 +61,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/order-sessions/{orderSession}/summary', [OrderSessionController::class, 'summary']);
     Route::get('/orders', [AdminOrderController::class, 'index']);
     Route::get('/orders/{order}', [AdminOrderController::class, 'show']);
+    Route::get('/customers', [AdminCustomerController::class, 'index']);
+    Route::get('/customers/{customer}/orders', [AdminCustomerController::class, 'orders']);
+    Route::post('/customers/{customer}/messages', [AdminCustomerController::class, 'sendMessage']);
+    Route::delete('/customers/{customer}', [AdminCustomerController::class, 'destroy']);
 
     Route::post('/register', [AuthController::class, 'register']);
 

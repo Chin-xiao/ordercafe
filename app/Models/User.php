@@ -10,19 +10,20 @@ use Laravel\Sanctum\HasApiTokens;
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
+
     protected $fillable = [
-    'name',      // <--- Add this
-    'email',     // <--- Add this
-    'password',  // <--- Add this (if not already hidden/guarded)
-    'telegram_id',
-    'username',
-    'first_name',
-    'last_name',
-    'phone',
-    'role',
-    'is_active',
-    'is_admin',
-];
+        'name',      // <--- Add this
+        'email',     // <--- Add this
+        'password',  // <--- Add this (if not already hidden/guarded)
+        'telegram_id',
+        'username',
+        'first_name',
+        'last_name',
+        'phone',
+        'role',
+        'is_active',
+        'is_admin',
+    ];
 
     protected $casts = [
         'is_active' => 'boolean',
@@ -38,6 +39,16 @@ class User extends Authenticatable
     public function orders()
     {
         return $this->hasMany(Order::class);
+    }
+
+    public function customerMessages()
+    {
+        return $this->hasMany(TelegramCustomerMessage::class, 'customer_id');
+    }
+
+    public function sentCustomerMessages()
+    {
+        return $this->hasMany(TelegramCustomerMessage::class, 'admin_id');
     }
 
     public function createdOrderSessions()

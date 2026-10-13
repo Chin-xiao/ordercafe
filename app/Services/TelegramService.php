@@ -165,7 +165,13 @@ class TelegramService
             $code = is_numeric($errorCode) ? ", Telegram error {$errorCode}" : '';
 
             throw new TelegramDeliveryException(
-                "Telegram rejected the message (HTTP {$response->status()}{$code}){$details}"
+                "Telegram rejected the message (HTTP {$response->status()}{$code}){$details}",
+                [],
+                is_numeric($errorCode) ? (int) $errorCode : null,
+                is_string($description) && $description !== '' ? $description : null,
+                is_numeric($response->json('parameters.retry_after'))
+                    ? (int) $response->json('parameters.retry_after')
+                    : null
             );
         }
 
