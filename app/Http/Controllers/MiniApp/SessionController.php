@@ -22,7 +22,12 @@ class SessionController extends Controller
         $startParam = $request->attributes->get('telegram_web_app_start_param');
         if ($startParam !== null) {
             $session = is_string($startParam) && ctype_digit($startParam)
-                ? OrderSession::query()->with('creator')->find((int) $startParam)
+                ? OrderSession::query()
+                    ->whereKey((int) $startParam)
+                    ->where('status', 'open')
+                    ->where('expires_at', '>', $now)
+                    ->with('creator')
+                    ->first()
                 : null;
         } else {
             $session = OrderSession::query()

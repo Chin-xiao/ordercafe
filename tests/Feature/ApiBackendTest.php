@@ -164,6 +164,88 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('data.can_order', true);
     }
 
+    public function test_mini_app_cannot_submit_an_order_for_a_different_session_than_signed_start_param(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $linkedSession = OrderSession::create([
+            'order_number' => 'SESSION-TEST-LINKED',
+            'title' => 'Linked Session',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $otherSession = OrderSession::create([
+            'order_number' => 'SESSION-TEST-OTHER',
+            'title' => 'Other Session',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $product = Product::create([
+            'name' => 'Coffee',
+            'price' => '2.50',
+            'is_available' => true,
+        ]);
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'start_param' => (string) $linkedSession->id,
+            'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $otherSession->id,
+            'items' => [['product_id' => $product->id, 'quantity' => 1]],
+        ], ['X-Telegram-Init-Data' => $initData])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('order_session_id');
+
+        $this->assertDatabaseCount('orders', 0);
+    }
+
+    public function test_mini_app_does_not_resolve_closed_or_expired_sessions_from_start_param(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $closedSession = OrderSession::create([
+            'order_number' => 'SESSION-TEST-CLOSED',
+            'title' => 'Closed Session',
+            'status' => 'closed',
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $expiredSession = OrderSession::create([
+            'order_number' => 'SESSION-TEST-EXPIRED',
+            'title' => 'Expired Session',
+            'status' => 'open',
+            'expires_at' => now()->subSecond(),
+            'created_by' => $admin->id,
+        ]);
+
+        foreach ([$closedSession, $expiredSession] as $session) {
+            $initData = $this->signedInitData($botToken, [
+                'auth_date' => (string) time(),
+                'start_param' => (string) $session->id,
+                'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
+            ]);
+
+            $this->getJson('/api/mini-app/order-session/current', [
+                'X-Telegram-Init-Data' => $initData,
+            ])->assertOk()->assertJsonPath('data', null);
+        }
+
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $expiredSession->id,
+            'status' => 'expired',
+        ]);
+    }
+
     public function test_cors_allows_the_configured_render_frontend_origin(): void
     {
         $this->call('OPTIONS', '/api/admin/products', server: [
@@ -406,8 +488,11 @@ class ApiBackendTest extends TestCase
 
         Http::assertSentCount(2);
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
-            && str_contains($request['text'], 'Order Session: Dinner')
-            && str_contains($request['text'], 'Order Deadline:')
+            && str_contains($request['text'], '🍽️ ORDER IS NOW OPEN!')
+            && str_contains($request['text'], '📝 Session: Dinner')
+            && str_contains($request['text'], 'Everyone can order now! Open the menu, select your food and drinks, and submit your order before the deadline.')
+            && str_contains($request['text'], '⏰ Order closes:')
+            && str_contains($request['text'], 'Click below to place your order.')
             && ($request['reply_markup']['inline_keyboard'][0][0] ?? null) === [
                 'text' => '🛒 ORDER NOW',
                 'url' => "https://t.me/ordercafe_bot/order?startapp={$session->id}",

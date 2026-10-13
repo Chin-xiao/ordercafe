@@ -49,25 +49,11 @@ class TelegramService
             ]);
         }
 
-        $timezone = config('app.business_timezone');
-        $message = "🍽️ CAFE ORDER IS NOW OPEN!\n\n";
-        $message .= "📢 You can order now!\n\n";
-        $message .= "📝 Order Session: {$session->title}\n\n";
-        $message .= '⏰ Order Deadline: '.$session->expires_at
-            ->copy()
-            ->setTimezone($timezone)
-            ->format('l, F j, Y g:i A T')." ({$timezone})\n\n";
-        $message .= ($session->announcement_message
-            ?: 'Please open the Mini App, choose your favorite drinks and food, and submit your order before the deadline.')
-            ."\n\n";
-        $message .= "👇 Click the button below to order now!\n\n";
-        $message .= 'Thank you!';
-
         return $this->sendToGroups(
             $groups,
             $session,
             'session_opened',
-            $message,
+            $this->orderStartedMessage($session),
             [
                 'inline_keyboard' => [[
                     [
@@ -103,25 +89,11 @@ class TelegramService
             return [];
         }
 
-        $timezone = config('app.business_timezone');
-        $message = "🍽️ CAFE ORDER IS NOW OPEN!\n\n";
-        $message .= "📢 You can order now!\n\n";
-        $message .= "📝 Order Session: {$session->title}\n\n";
-        $message .= '⏰ Order Deadline: '.$session->expires_at
-            ->copy()
-            ->setTimezone($timezone)
-            ->format('l, F j, Y g:i A T')." ({$timezone})\n\n";
-        $message .= ($session->announcement_message
-            ?: 'Please open the Mini App, choose your favorite drinks and food, and submit your order before the deadline.')
-            ."\n\n";
-        $message .= "👇 Click the button below to order now!\n\n";
-        $message .= 'Thank you!';
-
         return $this->sendToGroups(
             $groups,
             $session,
             'session_opened',
-            $message,
+            $this->orderStartedMessage($session),
             [
                 'inline_keyboard' => [[
                     [
@@ -311,6 +283,21 @@ class TelegramService
             .($parts['path'] ?? ''))
             .'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986)
             .(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
+    }
+
+    private function orderStartedMessage(OrderSession $session): string
+    {
+        $timezone = config('app.business_timezone');
+        $expiration = $session->expires_at
+            ->copy()
+            ->setTimezone($timezone)
+            ->format('l, F j, Y g:i A T')." ({$timezone})";
+
+        return "🍽️ ORDER IS NOW OPEN!\n\n"
+            ."📝 Session: {$session->title}\n\n"
+            ."Everyone can order now! Open the menu, select your food and drinks, and submit your order before the deadline.\n\n"
+            ."⏰ Order closes: {$expiration}\n\n"
+            .'Click below to place your order.';
     }
 
     private function sendToGroups(
