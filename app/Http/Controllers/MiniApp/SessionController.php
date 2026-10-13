@@ -21,11 +21,12 @@ class SessionController extends Controller
 
         $startParam = $request->attributes->get('telegram_web_app_start_param');
         if ($startParam !== null) {
-            $session = is_string($startParam) && ctype_digit($startParam)
+            $sessionId = is_string($startParam)
+                ? filter_var($startParam, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+                : false;
+            $session = $sessionId !== false
                 ? OrderSession::query()
-                    ->whereKey((int) $startParam)
-                    ->where('status', 'open')
-                    ->where('expires_at', '>', $now)
+                    ->whereKey($sessionId)
                     ->with('creator')
                     ->first()
                 : null;
@@ -43,9 +44,10 @@ class SessionController extends Controller
         }
 
         $data = $session->toArray();
-        $data['can_order'] = $session->status === 'open'
+        $data['ordering_allowed'] = $session->status === 'open'
             && $session->expires_at
             && $session->expires_at->isFuture();
+        $data['can_order'] = $data['ordering_allowed'];
 
         return response()->json(['data' => $data]);
     }

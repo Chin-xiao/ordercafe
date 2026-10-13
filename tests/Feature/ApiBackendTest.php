@@ -153,7 +153,7 @@ class ApiBackendTest extends TestCase
         ]);
         $initData = $this->signedInitData($botToken, [
             'auth_date' => (string) time(),
-            'start_param' => (string) $session->id,
+            'start_param' => 'order_'.$session->id,
             'user' => json_encode(['id' => 12345678, 'first_name' => 'Test'], JSON_THROW_ON_ERROR),
         ]);
 
@@ -161,7 +161,17 @@ class ApiBackendTest extends TestCase
             'X-Telegram-Init-Data' => $initData,
         ])->assertOk()
             ->assertJsonPath('data.id', $session->id)
+            ->assertJsonPath('data.ordering_allowed', true)
             ->assertJsonPath('data.can_order', true);
+
+        $invalidInitData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'start_param' => 'order_not-a-session',
+            'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
+        ]);
+        $this->getJson('/api/mini-app/order-session/current', [
+            'X-Telegram-Init-Data' => $invalidInitData,
+        ])->assertOk()->assertJsonPath('data', null);
     }
 
     public function test_mini_app_cannot_submit_an_order_for_a_different_session_than_signed_start_param(): void
@@ -193,9 +203,16 @@ class ApiBackendTest extends TestCase
         ]);
         $initData = $this->signedInitData($botToken, [
             'auth_date' => (string) time(),
-            'start_param' => (string) $linkedSession->id,
+            'start_param' => 'order_'.$linkedSession->id,
             'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
         ]);
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $linkedSession->id,
+            'items' => [['product_id' => $product->id, 'quantity' => 1]],
+        ], ['X-Telegram-Init-Data' => $initData])
+            ->assertCreated()
+            ->assertJsonPath('data.order_session_id', $linkedSession->id);
 
         $this->postJson('/api/mini-app/orders', [
             'order_session_id' => $otherSession->id,
@@ -204,7 +221,7 @@ class ApiBackendTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors('order_session_id');
 
-        $this->assertDatabaseCount('orders', 0);
+        $this->assertDatabaseCount('orders', 1);
     }
 
     public function test_mini_app_does_not_resolve_closed_or_expired_sessions_from_start_param(): void
@@ -228,22 +245,71 @@ class ApiBackendTest extends TestCase
             'created_by' => $admin->id,
         ]);
 
-        foreach ([$closedSession, $expiredSession] as $session) {
+        foreach ([[$closedSession, 'closed'], [$expiredSession, 'expired']] as [$session, $expectedStatus]) {
             $initData = $this->signedInitData($botToken, [
                 'auth_date' => (string) time(),
-                'start_param' => (string) $session->id,
+                'start_param' => 'order_'.$session->id,
                 'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
             ]);
 
             $this->getJson('/api/mini-app/order-session/current', [
                 'X-Telegram-Init-Data' => $initData,
-            ])->assertOk()->assertJsonPath('data', null);
+            ])->assertOk()
+                ->assertJsonPath('data.id', $session->id)
+                ->assertJsonPath('data.status', $expectedStatus)
+                ->assertJsonPath('data.ordering_allowed', false);
         }
 
         $this->assertDatabaseHas('order_sessions', [
             'id' => $expiredSession->id,
             'status' => 'expired',
         ]);
+    }
+
+    public function test_mini_app_cannot_submit_orders_for_closed_or_expired_sessions(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $product = Product::create([
+            'name' => 'Coffee',
+            'price' => '2.50',
+            'is_available' => true,
+        ]);
+        $sessions = [
+            OrderSession::create([
+                'order_number' => 'SESSION-TEST-CLOSED-ORDER',
+                'title' => 'Closed Session',
+                'status' => 'closed',
+                'expires_at' => now()->addHour(),
+                'created_by' => $admin->id,
+            ]),
+            OrderSession::create([
+                'order_number' => 'SESSION-TEST-EXPIRED-ORDER',
+                'title' => 'Expired Session',
+                'status' => 'open',
+                'expires_at' => now()->subSecond(),
+                'created_by' => $admin->id,
+            ]),
+        ];
+
+        foreach ($sessions as $session) {
+            $initData = $this->signedInitData($botToken, [
+                'auth_date' => (string) time(),
+                'start_param' => 'order_'.$session->id,
+                'user' => json_encode(['id' => 12345678], JSON_THROW_ON_ERROR),
+            ]);
+
+            $this->postJson('/api/mini-app/orders', [
+                'order_session_id' => $session->id,
+                'items' => [['product_id' => $product->id, 'quantity' => 1]],
+            ], ['X-Telegram-Init-Data' => $initData])
+                ->assertUnprocessable()
+                ->assertJsonValidationErrors('order_session_id');
+        }
+
+        $this->assertDatabaseCount('orders', 0);
     }
 
     public function test_cors_allows_the_configured_render_frontend_origin(): void
@@ -495,7 +561,7 @@ class ApiBackendTest extends TestCase
             && str_contains($request['text'], 'Click below to place your order.')
             && ($request['reply_markup']['inline_keyboard'][0][0] ?? null) === [
                 'text' => '🛒 ORDER NOW',
-                'url' => "https://t.me/ordercafe_bot/order?startapp={$session->id}",
+                'url' => "https://t.me/ordercafe_bot/order?startapp=order_{$session->id}",
             ]);
         Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
             && str_contains($request['text'], 'Iced Coffee × 5')
@@ -560,10 +626,9 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('announcement_sent', true);
 
         Http::assertSentCount(1);
-        Http::assertSent(fn (HttpRequest $request) => str_contains(
-            $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? '',
-            'startapp='.$session->id
-        ));
+        Http::assertSent(fn (HttpRequest $request) => (
+            $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? ''
+        ) === "https://t.me/ordercafe_bot?startapp=order_{$session->id}");
         $this->assertDatabaseHas('telegram_messages', [
             'order_session_id' => $session->id,
             'telegram_message_id' => 988,

@@ -38,7 +38,11 @@ class VerifyTelegramInitData
         }
 
         $userData = $validatedData['user'];
-        $request->attributes->set('telegram_web_app_start_param', $validatedData['start_param']);
+        $startParam = $validatedData['start_param'];
+        if (is_string($startParam) && preg_match('/^order_([1-9][0-9]*)$/D', $startParam, $matches)) {
+            $startParam = $matches[1];
+        }
+        $request->attributes->set('telegram_web_app_start_param', $startParam);
 
         $user = User::firstOrCreate(
             ['telegram_id' => $userData['id']],

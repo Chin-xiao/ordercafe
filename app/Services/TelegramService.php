@@ -276,7 +276,7 @@ class TelegramService
 
         $query = [];
         parse_str($parts['query'] ?? '', $query);
-        $query['startapp'] = (string) $session->id;
+        $query['startapp'] = 'order_'.$session->id;
 
         return ($parts['scheme'].'://'.$parts['host']
             .($parts['port'] ?? null ? ':'.$parts['port'] : '')
