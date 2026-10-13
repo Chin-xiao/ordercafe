@@ -274,6 +274,18 @@ class TelegramService
             );
         }
 
+        $bot = $this->getBotDetails($session);
+        if (($bot['username'] ?? null) !== $pathSegments[0]) {
+            throw new TelegramDeliveryException(
+                'TELEGRAM_MINI_APP_URL bot username does not match the configured Telegram bot.'
+            );
+        }
+        if (count($pathSegments) === 1 && ($bot['has_main_web_app'] ?? false) !== true) {
+            throw new TelegramDeliveryException(
+                'The Telegram bot has no configured Main Mini App. Configure it in BotFather before using the Main Mini App group link.'
+            );
+        }
+
         $query = [];
         parse_str($parts['query'] ?? '', $query);
         $query['startapp'] = 'order_'.$session->id;
@@ -283,6 +295,30 @@ class TelegramService
             .($parts['path'] ?? ''))
             .'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986)
             .(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
+    }
+
+    private function getBotDetails(OrderSession $session): array
+    {
+        if (! $this->botToken) {
+            throw new TelegramDeliveryException('The Telegram bot token is not configured.');
+        }
+
+        try {
+            $response = Http::timeout(10)->get("{$this->apiUrl}/getMe");
+        } catch (ConnectionException) {
+            throw new TelegramDeliveryException('The Telegram API could not be reached to verify the Mini App configuration.');
+        }
+
+        $bot = $response->json('result');
+        if ($response->failed() || $response->json('ok') !== true || ! is_array($bot)) {
+            Log::warning('Telegram bot configuration could not be verified.', [
+                'session_id' => $session->id,
+                'http_status' => $response->status(),
+            ]);
+            throw new TelegramDeliveryException('Telegram rejected the request to verify the bot Mini App configuration.');
+        }
+
+        return $bot;
     }
 
     private function orderStartedMessage(OrderSession $session): string

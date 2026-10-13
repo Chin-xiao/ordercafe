@@ -495,10 +495,16 @@ class ApiBackendTest extends TestCase
             'services.telegram.bot_token' => 'test-bot-token',
             'services.telegram.mini_app_url' => 'https://t.me/ordercafe_bot/order',
         ]);
-        Http::fake(['api.telegram.org/*' => Http::response([
-            'ok' => true,
-            'result' => ['message_id' => 987],
-        ])]);
+        Http::fake([
+            'api.telegram.org/*/getMe' => Http::response([
+                'ok' => true,
+                'result' => ['username' => 'ordercafe_bot'],
+            ]),
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 987],
+            ]),
+        ]);
 
         $admin = User::factory()->create(['is_admin' => true]);
         $session = OrderSession::create([
@@ -552,8 +558,9 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('summary.total_revenue', '12.50')
             ->assertJsonPath('summary.product_summary.0.total_quantity', 5);
 
-        Http::assertSentCount(2);
-        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
+        Http::assertSentCount(3);
+        Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
+            && $request['chat_id'] === -100123456789
             && str_contains($request['text'], '🍽️ ORDER IS NOW OPEN!')
             && str_contains($request['text'], '📝 Session: Dinner')
             && str_contains($request['text'], 'Everyone can order now! Open the menu, select your food and drinks, and submit your order before the deadline.')
@@ -563,7 +570,8 @@ class ApiBackendTest extends TestCase
                 'text' => '🛒 ORDER NOW',
                 'url' => "https://t.me/ordercafe_bot/order?startapp=order_{$session->id}",
             ]);
-        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === -100123456789
+        Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
+            && $request['chat_id'] === -100123456789
             && str_contains($request['text'], 'Iced Coffee × 5')
             && str_contains($request['text'], 'Total amount: $12.50'));
         $this->assertDatabaseHas('telegram_messages', [
@@ -575,16 +583,82 @@ class ApiBackendTest extends TestCase
         $this->assertSame(2, TelegramMessage::where('order_session_id', $session->id)->count());
     }
 
+    public function test_starting_a_session_does_not_post_a_main_app_link_when_bot_has_no_main_mini_app(): void
+    {
+        config([
+            'services.telegram.bot_token' => 'test-bot-token',
+            'services.telegram.mini_app_url' => 'https://t.me/ordercafe_bot',
+        ]);
+        Http::fake([
+            'api.telegram.org/*/getMe' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'username' => 'ordercafe_bot',
+                    'has_main_web_app' => false,
+                ],
+            ]),
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 989],
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-NO-MAIN-APP',
+            'title' => 'Lunch',
+            'expires_at' => now()->addHour(),
+            'status' => 'draft',
+            'created_by' => $admin->id,
+        ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456789,
+            'title' => 'Cafe Group',
+            'group_name' => 'Cafe Group',
+            'verify_token' => 'CAFE-TEST-TOKEN-3',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+
+        $this->postJson("/api/admin/order-sessions/{$session->id}/start", [], $headers)
+            ->assertStatus(502)
+            ->assertJsonPath('announcement_sent', false)
+            ->assertJsonPath('data.status', 'open')
+            ->assertJsonPath(
+                'error',
+                'The Telegram bot has no configured Main Mini App. Configure it in BotFather before using the Main Mini App group link.'
+            );
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'message_type' => 'session_opened',
+            'status' => 'failed',
+        ]);
+    }
+
     public function test_starting_a_session_reports_invalid_mini_app_link_without_rolling_back_session(): void
     {
         config([
             'services.telegram.bot_token' => 'test-bot-token',
             'services.telegram.mini_app_url' => 'https://ordercafe-front.onrender.com/app',
         ]);
-        Http::fake(['api.telegram.org/*' => Http::response([
-            'ok' => true,
-            'result' => ['message_id' => 988],
-        ])]);
+        Http::fake([
+            'api.telegram.org/*/getMe' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'username' => 'ordercafe_bot',
+                    'has_main_web_app' => true,
+                ],
+            ]),
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 988],
+            ]),
+        ]);
 
         $admin = User::factory()->create(['is_admin' => true]);
         $session = OrderSession::create([
@@ -625,7 +699,7 @@ class ApiBackendTest extends TestCase
             ->assertJsonPath('session_started', true)
             ->assertJsonPath('announcement_sent', true);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
         Http::assertSent(fn (HttpRequest $request) => (
             $request['reply_markup']['inline_keyboard'][0][0]['url'] ?? ''
         ) === "https://t.me/ordercafe_bot?startapp=order_{$session->id}");
