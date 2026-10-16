@@ -73,7 +73,10 @@ class VerifyTelegramInitData
             'first_name' => $userData['first_name'] ?? null,
             'last_name' => $userData['last_name'] ?? null,
         ];
-        $user->fill($profile)->save();
+        $user->fill($profile);
+        if ($user->isDirty()) {
+            $user->save();
+        }
 
         $request->setUserResolver(fn () => $user);
 

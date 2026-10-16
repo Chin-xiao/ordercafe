@@ -12,13 +12,6 @@ class SessionController extends Controller
     public function current(Request $request)
     {
         $now = Carbon::now('UTC');
-        OrderSession::query()
-            ->where('status', 'open')
-            ->where(function ($query) use ($now) {
-                $query->whereNull('expires_at')->orWhere('expires_at', '<=', $now);
-            })
-            ->update(['status' => 'expired']);
-
         $startParam = $request->attributes->get('telegram_web_app_start_param');
         if ($startParam !== null) {
             $sessionId = is_string($startParam)
@@ -30,6 +23,12 @@ class SessionController extends Controller
                     ->with('creator')
                     ->first()
                 : null;
+
+            if ($session
+                && $session->status === 'open'
+                && (! $session->expires_at || $session->expires_at->lessThanOrEqualTo($now))) {
+                $session->setAttribute('status', 'expired');
+            }
         } else {
             $session = OrderSession::query()
                 ->where('status', 'open')
@@ -39,7 +38,7 @@ class SessionController extends Controller
                 ->first();
         }
 
-        if (!$session) {
+        if (! $session) {
             return response()->json(['data' => null]);
         }
 

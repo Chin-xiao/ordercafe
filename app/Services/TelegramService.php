@@ -7,6 +7,7 @@ use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -192,12 +193,18 @@ class TelegramService
             $payload['parse_mode'] = $parseMode;
         }
 
+        $startedAt = hrtime(true);
         try {
             $response = Http::timeout(10)->post("{$this->apiUrl}/sendMessage", $payload);
         } catch (ConnectionException) {
+            Log::warning('Telegram API request failed to connect.', [
+                'operation' => 'sendMessage',
+                'duration_ms' => $this->durationMs($startedAt),
+            ]);
             throw new TelegramDeliveryException('The Telegram API could not be reached.');
         }
 
+        $duration = $this->durationMs($startedAt);
         $telegramMessageId = $response->json('result.message_id');
         if ($response->failed() || $response->json('ok') !== true || ! is_numeric($telegramMessageId)) {
             $errorCode = $response->json('error_code');
@@ -206,6 +213,13 @@ class TelegramService
                 ? ": {$description}"
                 : '';
             $code = is_numeric($errorCode) ? ", Telegram error {$errorCode}" : '';
+
+            Log::warning('Telegram API rejected a message request.', [
+                'operation' => 'sendMessage',
+                'http_status' => $response->status(),
+                'telegram_error_code' => is_numeric($errorCode) ? (int) $errorCode : null,
+                'duration_ms' => $duration,
+            ]);
 
             throw new TelegramDeliveryException(
                 "Telegram rejected the message (HTTP {$response->status()}{$code}){$details}",
@@ -217,6 +231,12 @@ class TelegramService
                     : null
             );
         }
+
+        Log::info('Telegram API request completed.', [
+            'operation' => 'sendMessage',
+            'http_status' => $response->status(),
+            'duration_ms' => $duration,
+        ]);
 
         return (int) $telegramMessageId;
     }
@@ -353,22 +373,43 @@ class TelegramService
             throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
 
-        try {
-            $response = Http::timeout(10)->get("{$this->apiUrl}/getMe");
-        } catch (ConnectionException) {
-            throw new TelegramDeliveryException('The Telegram API could not be reached to verify the Mini App configuration.');
-        }
+        return Cache::store('file')->remember(
+            'telegram:bot:details:'.substr(hash('sha256', $this->botToken), 0, 16),
+            Carbon::now()->addMinutes(10),
+            function () use ($session): array {
+                $startedAt = hrtime(true);
+                try {
+                    $response = Http::timeout(10)->get("{$this->apiUrl}/getMe");
+                } catch (ConnectionException) {
+                    Log::warning('Telegram bot verification request could not connect.', [
+                        'session_id' => $session->id,
+                        'operation' => 'getMe',
+                        'duration_ms' => $this->durationMs($startedAt),
+                    ]);
+                    throw new TelegramDeliveryException('The Telegram API could not be reached to verify the Mini App configuration.');
+                }
 
-        $bot = $response->json('result');
-        if ($response->failed() || $response->json('ok') !== true || ! is_array($bot)) {
-            Log::warning('Telegram bot configuration could not be verified.', [
-                'session_id' => $session->id,
-                'http_status' => $response->status(),
-            ]);
-            throw new TelegramDeliveryException('Telegram rejected the request to verify the bot Mini App configuration.');
-        }
+                $duration = $this->durationMs($startedAt);
+                $bot = $response->json('result');
+                if ($response->failed() || $response->json('ok') !== true || ! is_array($bot)) {
+                    Log::warning('Telegram bot configuration could not be verified.', [
+                        'session_id' => $session->id,
+                        'operation' => 'getMe',
+                        'http_status' => $response->status(),
+                        'duration_ms' => $duration,
+                    ]);
+                    throw new TelegramDeliveryException('Telegram rejected the request to verify the bot Mini App configuration.');
+                }
 
-        return $bot;
+                Log::info('Telegram API request completed.', [
+                    'operation' => 'getMe',
+                    'http_status' => $response->status(),
+                    'duration_ms' => $duration,
+                ]);
+
+                return $bot;
+            }
+        );
     }
 
     private function orderStartedMessage(OrderSession $session): string
@@ -561,5 +602,10 @@ class TelegramService
     private function formatCurrency(string|int|float $amount): string
     {
         return rtrim(rtrim(number_format((float) $amount, 2, '.', ''), '0'), '.');
+    }
+
+    private function durationMs(int $startedAt): float
+    {
+        return round((hrtime(true) - $startedAt) / 1_000_000, 2);
     }
 }

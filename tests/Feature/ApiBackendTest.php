@@ -13,13 +13,27 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class ApiBackendTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
+        Cache::store('file')->forget(
+            'telegram:bot:details:'.substr(hash('sha256', 'test-bot-token'), 0, 16)
+        );
+    }
 
     public function test_admin_routes_require_a_valid_admin_token(): void
     {
@@ -126,6 +140,90 @@ class ApiBackendTest extends TestCase
             'email' => 'telegram123456789@users.invalid',
         ]);
         $this->assertArrayNotHasKey('password', $order->user->toArray());
+    }
+
+    public function test_catalog_cache_avoids_repeat_catalog_queries_and_admin_edits_invalidate_it(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
+
+        $category = \App\Models\Category::create([
+            'name' => 'Drink',
+            'is_active' => true,
+        ]);
+        $product = Product::create([
+            'category_id' => $category->id,
+            'name' => 'Cache Latte',
+            'price' => '5.00',
+            'is_available' => true,
+        ]);
+        $admin = User::factory()->create(['is_admin' => true]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'user' => json_encode(['id' => 654321987, 'first_name' => 'Cache User'], JSON_THROW_ON_ERROR),
+        ]);
+
+        $catalogQueries = [];
+        $userUpdates = [];
+        Log::spy();
+        DB::listen(function ($query) use (&$catalogQueries, &$userUpdates): void {
+            if (preg_match('/\\b(from|join)\\s+["`]?((products)|(categories))["`]?/i', $query->sql)) {
+                $catalogQueries[] = $query->sql;
+            }
+            if (preg_match('/^update\\s+["`]?users["`]?/i', trim($query->sql))) {
+                $userUpdates[] = $query->sql;
+            }
+        });
+
+        $this->getJson('/api/mini-app/products', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.0.name', 'Cache Latte')
+            ->assertJsonPath('sugar_percent_options', [0, 25, 50, 75, 100]);
+        Log::shouldHaveReceived('info')
+            ->with('API request performance.', \Mockery::on(fn (array $context): bool => (
+                $context['path'] === 'api/mini-app/products'
+                && $context['status'] === 200
+                && $context['query_count'] > 0
+                && $context['response_bytes'] > 0
+                && isset($context['first_query_by_connection_ms'])
+                && isset($context['request_duration_ms'], $context['query_duration_ms'])
+                && ! isset($context['bindings'], $context['init_data'], $context['bot_token'])
+            )))
+            ->once();
+        $this->getJson('/api/mini-app/products', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.0.price', '5.00');
+        $this->assertCount(2, $catalogQueries);
+        $this->assertCount(0, $userUpdates);
+
+        $this->patchJson("/api/admin/products/{$product->id}", [
+            'price' => '6.00',
+        ], $headers)->assertOk();
+
+        $queriesBeforeCacheRefresh = count($catalogQueries);
+        $this->getJson('/api/mini-app/products', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.0.price', '6.00');
+        $this->assertCount($queriesBeforeCacheRefresh + 2, $catalogQueries);
+        $this->assertCount(0, $userUpdates);
+
+        $this->getJson('/api/mini-app/categories', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.0.products.0.price', '6.00');
+        $this->patchJson("/api/admin/categories/{$category->id}", [
+            'name' => 'Beverage',
+        ], $headers)->assertOk();
+        $this->getJson('/api/mini-app/categories', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.0.name', 'Beverage');
+
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
     }
 
     public function test_mini_app_rejects_expired_or_unsigned_init_data(): void
@@ -244,6 +342,12 @@ class ApiBackendTest extends TestCase
             'expires_at' => now()->subSecond(),
             'created_by' => $admin->id,
         ]);
+        $sessionUpdates = 0;
+        DB::listen(function ($query) use (&$sessionUpdates): void {
+            if (preg_match('/^update\\s+["`]?order_sessions["`]?/i', trim($query->sql))) {
+                $sessionUpdates++;
+            }
+        });
 
         foreach ([[$closedSession, 'closed'], [$expiredSession, 'expired']] as [$session, $expectedStatus]) {
             $initData = $this->signedInitData($botToken, [
@@ -260,9 +364,15 @@ class ApiBackendTest extends TestCase
                 ->assertJsonPath('data.ordering_allowed', false);
         }
 
+        $this->assertSame(0, $sessionUpdates);
         $this->assertDatabaseHas('order_sessions', [
             'id' => $expiredSession->id,
-            'status' => 'expired',
+                'status' => 'open',
+        ]);
+        Artisan::call('order-sessions:expire');
+        $this->assertDatabaseHas('order_sessions', [
+                'id' => $expiredSession->id,
+                'status' => 'expired',
         ]);
     }
 
@@ -772,6 +882,12 @@ class ApiBackendTest extends TestCase
             'auth_date' => (string) time(),
             'user' => json_encode(['id' => 7654001, 'first_name' => 'Dara'], JSON_THROW_ON_ERROR),
         ]);
+        $itemInserts = 0;
+        DB::listen(function ($query) use (&$itemInserts): void {
+            if (preg_match('/^insert into ["`]?order_items["`]?/i', trim($query->sql))) {
+                $itemInserts++;
+            }
+        });
 
         $this->postJson('/api/mini-app/orders', [
             'order_session_id' => $session->id,
@@ -800,6 +916,7 @@ class ApiBackendTest extends TestCase
         $this->assertSame([50, 75, 0, null], array_column($items, 'sugar_percent'));
         $this->assertSame(['5000.00', '5000.00', '4000.00', '4000.00'], array_column($items, 'unit_price'));
         $this->assertSame(4, OrderItem::count());
+        $this->assertSame(1, $itemInserts);
     }
 
     public function test_admin_daily_order_report_uses_business_dates_and_keeps_orders_separate_from_items(): void

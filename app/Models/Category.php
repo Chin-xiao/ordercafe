@@ -2,10 +2,17 @@
 
 namespace App\Models;
 
+use App\Services\MiniAppCatalogCache;
 use Illuminate\Database\Eloquent\Model;
 
 class Category extends Model
 {
+    protected static function booted(): void
+    {
+        static::saved(fn () => MiniAppCatalogCache::forget());
+        static::deleted(fn () => MiniAppCatalogCache::forget());
+    }
+
     protected $fillable = [
         'name',
         'description',

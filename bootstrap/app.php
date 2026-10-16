@@ -16,6 +16,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('order-sessions:expire')->everyMinute()->withoutOverlapping();
     })
     ->withMiddleware(function (Middleware $middleware) {
+        $middleware->api(append: [\App\Http\Middleware\RecordApiPerformance::class]);
+
         // Enable CORS globally so preflight and error responses include headers
         $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
 

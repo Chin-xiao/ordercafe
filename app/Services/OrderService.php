@@ -82,9 +82,11 @@ class OrderService
             $productIds = collect($itemsData)->pluck('product_id');
             $products = Product::whereIn('id', $productIds)
                 ->where('is_available', true)
-                ->get()
+                ->get(['id', 'name', 'price'])
                 ->keyBy('id');
 
+            $orderItems = [];
+            $timestamp = Carbon::now('UTC');
             foreach ($itemsData as $item) {
                 $productId = $item['product_id'];
                 $quantity = (int) $item['quantity'];
@@ -109,22 +111,27 @@ class OrderService
                 $totalCents += $subtotalCents;
 
                 // Create order item snapshot
-                $order->items()->create([
+                $orderItems[] = [
+                    'order_id' => $order->id,
                     'product_id' => $product->id,
                     'product_name' => $product->name,
                     'unit_price' => $unitPrice,
                     'quantity' => $quantity,
                     'subtotal' => $subtotal,
                     'sugar_percent' => $item['sugar_percent'] ?? null,
-                ]);
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ];
             }
 
             // Ensure order contains actual items
-            if ($order->items()->count() === 0) {
+            if ($orderItems === []) {
                 throw ValidationException::withMessages([
                     'items' => ['Your order must contain at least one valid item.'],
                 ]);
             }
+
+            DB::table('order_items')->insert($orderItems);
 
             // 7. Update order with calculated total sum
             $order->update(['total_amount' => number_format($totalCents / 100, 2, '.', '')]);
