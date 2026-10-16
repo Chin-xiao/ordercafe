@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\MiniApp;
 
 use App\Http\Controllers\Controller;
+use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Services\OrderService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
@@ -22,8 +24,14 @@ class OrderController extends Controller
         $validated = $request->validate([
             'order_session_id' => ['required', 'exists:order_sessions,id'],
             'items' => ['required', 'array', 'min:1'],
-            'items.*.product_id' => ['required', 'integer', 'distinct', 'exists:products,id'],
+            'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1', 'max:100'],
+            'items.*.sugar_percent' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::in(OrderItem::allowedSugarPercentages()),
+            ],
         ]);
 
         $startParam = $request->attributes->get('telegram_web_app_start_param');

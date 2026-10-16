@@ -9,6 +9,7 @@ class TelegramMessage extends Model
         'telegram_group_id',
         'order_session_id',
         'message_type',
+        'idempotency_key',
         'telegram_chat_id',
         'telegram_message_id',
         'status',

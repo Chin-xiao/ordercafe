@@ -6,6 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class OrderItem extends Model
 {
+    public static function allowedSugarPercentages(): array
+    {
+        return config('orders.sugar_percentages', [0, 25, 50, 75, 100]);
+    }
+
     protected $fillable = [
         'order_id',
         'product_id',
@@ -13,11 +18,13 @@ class OrderItem extends Model
         'unit_price',
         'quantity',
         'subtotal',
+        'sugar_percent',
     ];
 
     protected $casts = [
         'unit_price' => 'decimal:2',
         'subtotal' => 'decimal:2',
+        'sugar_percent' => 'integer',
     ];
 
     public function order()

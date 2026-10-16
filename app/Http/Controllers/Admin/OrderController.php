@@ -126,6 +126,7 @@ class OrderController extends Controller
             'total_amount' => $order->total_amount,
             'items' => $order->items->map(fn ($item) => [
                 'product_name' => $item->product_name,
+                'sugar_percent' => $item->sugar_percent,
                 'quantity' => $item->quantity,
                 'unit_price' => $item->unit_price,
                 'subtotal' => $item->subtotal,

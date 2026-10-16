@@ -7,6 +7,7 @@ use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -57,11 +58,12 @@ class TelegramService
             [
                 'inline_keyboard' => [[
                     [
-                        'text' => '🛒 ORDER NOW',
+                        'text' => '🛒 Order Now',
                         'url' => $appUrl,
                     ],
                 ]],
-            ]
+            ],
+            'HTML'
         );
     }
 
@@ -97,11 +99,13 @@ class TelegramService
             [
                 'inline_keyboard' => [[
                     [
-                        'text' => '🛒 ORDER NOW',
+                        'text' => '🛒 Order Now',
                         'url' => $appUrl,
                     ],
                 ]],
-            ]
+            ],
+            'HTML',
+            true
         );
     }
 
@@ -118,22 +122,58 @@ class TelegramService
             ]);
         }
 
-        $message = "ORDER SESSION CLOSED\n\n";
-        $message .= "Session: {$session->title}\n\n";
-        $message .= "Customers ordered: {$summaryData['total_customers']}\n";
-        $message .= "Total orders: {$summaryData['total_orders']}\n\n";
-        $message .= "Order summary:\n";
+        $closingStatus = $summaryData['closing_status'] ?? $session->status;
+        $lines = [
+            '<b>Order Summary</b>',
+            'Session: '.htmlspecialchars($session->title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            'Status: '.htmlspecialchars((string) $closingStatus, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            '',
+        ];
 
-        foreach ($summaryData['product_summary'] as $item) {
-            $message .= "- {$item['product_name']} × {$item['total_quantity']}\n";
+        if ((int) $summaryData['total_orders'] === 0) {
+            $lines[] = 'No orders were placed in this session.';
+        } elseif ($summaryData['product_summary'] === []) {
+            $lines[] = 'No drink items were recorded for this session.';
+        } else {
+            foreach ($summaryData['product_summary'] as $item) {
+                $productName = htmlspecialchars($item['product_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                $sugar = $item['sugar_percent'] === null ? '' : " {$item['sugar_percent']}%";
+                $quantity = (int) $item['total_quantity'];
+                $unitPrice = $this->formatCurrency($item['unit_price']);
+                $lineTotal = $this->formatCurrency($item['subtotal']);
+                $description = "- {$productName}{$sugar} x{$quantity}";
+
+                if ($quantity > 1) {
+                    $description .= " Unit price: {$unitPrice}៛; Line total: {$lineTotal}៛";
+                } else {
+                    $description .= " Price: {$lineTotal}៛";
+                }
+
+                $lines[] = $description;
+            }
         }
 
-        $message .= "\nTotal amount: \${$summaryData['total_revenue']}\n\nThank you for ordering!";
+        $lines[] = '';
+        $lines[] = '<b>Total Price: '.$this->formatCurrency($summaryData['total_revenue']).'៛</b>';
 
-        return $this->sendToGroups($groups, $session, 'session_closed', $message);
+        $results = [];
+        foreach ($this->splitTelegramMessageLines($lines) as $index => $message) {
+            $messageType = $index === 0 ? 'session_closed' : 'session_closed_part_'.($index + 1);
+            $results = [
+                ...$results,
+                ...$this->sendToGroups($groups, $session, $messageType, $message, null, 'HTML'),
+            ];
+        }
+
+        return $results;
     }
 
-    public function sendMessage(int|string $chatId, string $text, ?array $replyMarkup = null): int
+    public function sendMessage(
+        int|string $chatId,
+        string $text,
+        ?array $replyMarkup = null,
+        ?string $parseMode = null
+    ): int
     {
         if (! $this->botToken) {
             Log::warning('Telegram notification failed: TELEGRAM_BOT_TOKEN is not configured.');
@@ -147,6 +187,9 @@ class TelegramService
 
         if ($replyMarkup !== null) {
             $payload['reply_markup'] = $replyMarkup;
+        }
+        if ($parseMode !== null) {
+            $payload['parse_mode'] = $parseMode;
         }
 
         try {
@@ -229,6 +272,7 @@ class TelegramService
                     'telegram_group_id' => $group->id,
                     'order_session_id' => $session->id,
                     'message_type' => $messageType,
+                    'idempotency_key' => $this->deliveryKey($group, $session, $messageType),
                     'telegram_chat_id' => $group->telegram_chat_id,
                     'status' => 'failed',
                     'error_message' => $error,
@@ -329,17 +373,7 @@ class TelegramService
 
     private function orderStartedMessage(OrderSession $session): string
     {
-        $timezone = config('app.business_timezone');
-        $expiration = $session->expires_at
-            ->copy()
-            ->setTimezone($timezone)
-            ->format('l, F j, Y g:i A T')." ({$timezone})";
-
-        return "🍽️ ORDER IS NOW OPEN!\n\n"
-            ."📝 Session: {$session->title}\n\n"
-            ."Everyone can order now! Open the menu, select your food and drinks, and submit your order before the deadline.\n\n"
-            ."⏰ Order closes: {$expiration}\n\n"
-            .'Click below to place your order.';
+        return "តោះមេៗអាច Order Drink អីឡូវ​បាន\n\nPlease Click <b>Order Now</b>";
     }
 
     private function sendToGroups(
@@ -347,52 +381,28 @@ class TelegramService
         OrderSession $session,
         string $messageType,
         string $text,
-        ?array $replyMarkup = null
+        ?array $replyMarkup = null,
+        ?string $parseMode = null,
+        bool $retryFailed = false
     ): array {
         $results = [];
 
         foreach ($groups as $group) {
-            $alreadySent = TelegramMessage::query()
-                ->where('telegram_group_id', $group->id)
-                ->where('order_session_id', $session->id)
-                ->where('message_type', $messageType)
-                ->where('status', 'sent')
-                ->exists();
-
-            if ($alreadySent) {
+            $claim = $this->claimDelivery($group, $session, $messageType, $retryFailed);
+            if ($claim['status'] !== 'claimed') {
                 $results[] = [
                     'telegram_group_id' => $group->id,
-                    'status' => 'already_sent',
+                    'status' => $claim['status'],
+                    ...($claim['error'] ? ['error' => $claim['error']] : []),
                 ];
 
                 continue;
             }
 
-            $delivery = TelegramMessage::query()
-                ->where('telegram_group_id', $group->id)
-                ->where('order_session_id', $session->id)
-                ->where('message_type', $messageType)
-                ->where('status', 'failed')
-                ->first();
-
-            if ($delivery) {
-                $delivery->update([
-                    'telegram_chat_id' => $group->telegram_chat_id,
-                    'status' => 'pending',
-                    'error_message' => null,
-                ]);
-            } else {
-                $delivery = TelegramMessage::create([
-                    'telegram_group_id' => $group->id,
-                    'order_session_id' => $session->id,
-                    'message_type' => $messageType,
-                    'telegram_chat_id' => $group->telegram_chat_id,
-                    'status' => 'pending',
-                ]);
-            }
+            $delivery = $claim['delivery'];
 
             try {
-                $messageId = $this->sendMessage($group->telegram_chat_id, $text, $replyMarkup);
+                $messageId = $this->sendMessage($group->telegram_chat_id, $text, $replyMarkup, $parseMode);
                 $delivery->update([
                     'telegram_message_id' => $messageId,
                     'status' => 'sent',
@@ -424,5 +434,132 @@ class TelegramService
         }
 
         return $results;
+    }
+
+    private function claimDelivery(
+        TelegramGroup $group,
+        OrderSession $session,
+        string $messageType,
+        bool $retryFailed
+    ): array {
+        return DB::transaction(function () use ($group, $session, $messageType, $retryFailed): array {
+            $key = $this->deliveryKey($group, $session, $messageType);
+            $newDelivery = false;
+            $delivery = TelegramMessage::query()
+                ->where('idempotency_key', $key)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $delivery) {
+                $delivery = TelegramMessage::query()
+                    ->where('telegram_group_id', $group->id)
+                    ->where('order_session_id', $session->id)
+                    ->where('message_type', $messageType)
+                    ->where('status', 'sent')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $delivery) {
+                    $delivery = TelegramMessage::query()
+                        ->where('telegram_group_id', $group->id)
+                        ->where('order_session_id', $session->id)
+                        ->where('message_type', $messageType)
+                        ->where('status', 'pending')
+                        ->lockForUpdate()
+                        ->first();
+                }
+
+                if (! $delivery) {
+                    $delivery = TelegramMessage::query()
+                        ->where('telegram_group_id', $group->id)
+                        ->where('order_session_id', $session->id)
+                        ->where('message_type', $messageType)
+                        ->lockForUpdate()
+                        ->first();
+                }
+
+                if ($delivery) {
+                    $delivery->update(['idempotency_key' => $key]);
+                } else {
+                    $now = Carbon::now('UTC');
+                    $inserted = DB::table('telegram_messages')->insertOrIgnore([
+                        'telegram_group_id' => $group->id,
+                        'order_session_id' => $session->id,
+                        'message_type' => $messageType,
+                        'idempotency_key' => $key,
+                        'telegram_chat_id' => $group->telegram_chat_id,
+                        'status' => 'pending',
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                    $newDelivery = $inserted > 0;
+                    $delivery = TelegramMessage::query()
+                        ->where('idempotency_key', $key)
+                        ->lockForUpdate()
+                        ->first();
+                }
+            }
+
+            if (! $delivery) {
+                throw new \RuntimeException('Unable to claim Telegram notification delivery.');
+            }
+
+            if ($newDelivery) {
+                return ['status' => 'claimed', 'delivery' => $delivery, 'error' => null];
+            }
+            if ($delivery->status === 'sent') {
+                return ['status' => 'already_sent', 'delivery' => $delivery, 'error' => null];
+            }
+            if ($delivery->status === 'pending') {
+                return ['status' => 'already_pending', 'delivery' => $delivery, 'error' => null];
+            }
+            if ($delivery->status === 'failed' && ! $retryFailed) {
+                return [
+                    'status' => 'failed',
+                    'delivery' => $delivery,
+                    'error' => $delivery->error_message,
+                ];
+            }
+
+            $delivery->update([
+                'telegram_chat_id' => $group->telegram_chat_id,
+                'status' => 'pending',
+                'error_message' => null,
+            ]);
+
+            return ['status' => 'claimed', 'delivery' => $delivery, 'error' => null];
+        });
+    }
+
+    private function deliveryKey(TelegramGroup $group, OrderSession $session, string $messageType): string
+    {
+        return "session:{$session->id}:group:{$group->id}:{$messageType}";
+    }
+
+    private function splitTelegramMessageLines(array $lines): array
+    {
+        $messages = [];
+        $current = '';
+
+        foreach ($lines as $line) {
+            $candidate = $current === '' ? $line : "{$current}\n{$line}";
+            if (mb_strlen($candidate) > 4000 && $current !== '') {
+                $messages[] = $current;
+                $current = $line;
+            } else {
+                $current = $candidate;
+            }
+        }
+
+        if ($current !== '') {
+            $messages[] = $current;
+        }
+
+        return $messages;
+    }
+
+    private function formatCurrency(string|int|float $amount): string
+    {
+        return rtrim(rtrim(number_format((float) $amount, 2, '.', ''), '0'), '.');
     }
 }

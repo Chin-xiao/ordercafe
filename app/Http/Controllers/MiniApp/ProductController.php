@@ -4,6 +4,7 @@ namespace App\Http\Controllers\MiniApp;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Models\OrderItem;
 use App\Models\Product;
 
 class ProductController extends Controller
@@ -21,7 +22,10 @@ class ProductController extends Controller
             ->orderBy('name')
             ->get();
 
-        return response()->json(['data' => $products]);
+        return response()->json([
+            'data' => $products,
+            'sugar_percent_options' => OrderItem::allowedSugarPercentages(),
+        ]);
     }
 
     public function categories()
@@ -33,6 +37,9 @@ class ProductController extends Controller
             ->orderBy('name')
             ->get();
 
-        return response()->json(['data' => $categories]);
+        return response()->json([
+            'data' => $categories,
+            'sugar_percent_options' => OrderItem::allowedSugarPercentages(),
+        ]);
     }
 }

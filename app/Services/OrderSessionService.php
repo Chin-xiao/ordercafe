@@ -6,6 +6,7 @@ use App\Models\OrderSession;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrderSessionService
@@ -36,6 +37,8 @@ class OrderSessionService
      */
     public function startSession(OrderSession $session): array
     {
+        $this->expireSessions();
+
         $startedSession = DB::transaction(function () use ($session): OrderSession {
             $lockedSessions = OrderSession::query()
                 ->orderBy('id')
@@ -57,12 +60,6 @@ class OrderSessionService
             }
 
             $now = Carbon::now('UTC');
-            foreach ($lockedSessions as $candidate) {
-                if ($candidate->status === 'open'
-                    && (! $candidate->expires_at || $candidate->expires_at->lessThanOrEqualTo($now))) {
-                    $candidate->update(['status' => 'expired']);
-                }
-            }
 
             if ($lockedSessions->contains(fn (OrderSession $candidate) => $candidate->status === 'open')) {
                 throw ValidationException::withMessages([
@@ -171,13 +168,57 @@ class OrderSessionService
 
     public function expireSessions(): int
     {
-        return OrderSession::query()
+        $sessionIds = OrderSession::query()
             ->where('status', 'open')
             ->where(function ($query) {
                 $query->whereNull('expires_at')
                     ->orWhere('expires_at', '<=', Carbon::now('UTC'));
             })
-            ->update(['status' => 'expired']);
+            ->orderBy('id')
+            ->pluck('id');
+        $expiredCount = 0;
+
+        foreach ($sessionIds as $sessionId) {
+            $summary = DB::transaction(function () use ($sessionId): ?array {
+                $session = OrderSession::query()
+                    ->whereKey($sessionId)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $session
+                    || $session->status !== 'open'
+                    || ($session->expires_at && $session->expires_at->isFuture())) {
+                    return null;
+                }
+
+                $session->update([
+                    'status' => 'expired',
+                    'closed_at' => Carbon::now('UTC'),
+                ]);
+
+                return $this->sessionSummary($session->fresh());
+            });
+
+            if ($summary === null) {
+                continue;
+            }
+
+            $expiredCount++;
+            try {
+                $notifications = $this->telegramService->sendOrderSummaryNotification($summary);
+                $this->throwIfDeliveryFailed($notifications, [
+                    'summary' => $summary,
+                    'notifications' => $notifications,
+                ]);
+            } catch (TelegramDeliveryException $exception) {
+                Log::warning('Expired order session summary could not be delivered.', [
+                    'session_id' => $sessionId,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return $expiredCount;
     }
 
     public function sessionSummary(OrderSession $session): array
@@ -190,14 +231,15 @@ class OrderSessionService
             ->where('orders.status', 'submitted')
             ->join('order_items', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw(
-                'order_items.product_name, order_items.unit_price, SUM(order_items.quantity) as total_quantity, SUM(order_items.subtotal) as subtotal'
+                'order_items.product_name, order_items.unit_price, order_items.sugar_percent, SUM(order_items.quantity) as total_quantity, SUM(order_items.subtotal) as subtotal'
             )
-            ->groupBy('order_items.product_name', 'order_items.unit_price')
+            ->groupBy('order_items.product_name', 'order_items.unit_price', 'order_items.sugar_percent')
             ->orderBy('order_items.product_name')
             ->get()
             ->map(fn ($item) => [
                 'product_name' => $item->product_name,
                 'unit_price' => number_format((float) $item->unit_price, 2, '.', ''),
+                'sugar_percent' => $item->sugar_percent === null ? null : (int) $item->sugar_percent,
                 'total_quantity' => (int) $item->total_quantity,
                 'subtotal' => number_format((float) $item->subtotal, 2, '.', ''),
             ])
@@ -208,6 +250,7 @@ class OrderSessionService
             'total_customers' => $customerCount,
             'total_orders' => $orderCount,
             'total_revenue' => number_format((float) $totalRevenue, 2, '.', ''),
+            'closing_status' => $session->status,
             'product_summary' => $productSummary,
         ];
     }
@@ -215,9 +258,9 @@ class OrderSessionService
     private function throwIfDeliveryFailed(array $notifications, array $sessionData): void
     {
         foreach ($notifications as $notification) {
-            if ($notification['status'] === 'failed') {
+            if (in_array($notification['status'], ['failed', 'already_pending'], true)) {
                 throw new TelegramDeliveryException(
-                    'Telegram notification delivery failed for one or more verified groups.',
+                    'Telegram notification delivery failed or is still pending for one or more verified groups.',
                     $sessionData
                 );
             }

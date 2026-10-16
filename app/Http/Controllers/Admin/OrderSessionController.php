@@ -147,12 +147,12 @@ class OrderSessionController extends Controller
         }
 
         $failed = collect($result['notifications'])->contains(
-            fn (array $notification) => $notification['status'] === 'failed'
+            fn (array $notification) => in_array($notification['status'], ['failed', 'already_pending'], true)
         );
 
         return response()->json([
             'message' => $failed
-                ? 'The session remains open, but one or more announcement retries failed.'
+                ? 'The session remains open, but one or more announcement retries failed or are still pending.'
                 : 'The Telegram opening announcement was sent.',
             'session_started' => true,
             'announcement_sent' => ! $failed,

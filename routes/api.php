@@ -80,6 +80,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/reports/sales', [ReportController::class, 'sales']);
     Route::get('/reports/products', [ReportController::class, 'products']);
+    Route::get('/reports/daily-orders', [ReportController::class, 'dailyOrders']);
 
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);

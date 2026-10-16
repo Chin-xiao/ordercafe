@@ -561,19 +561,17 @@ class ApiBackendTest extends TestCase
         Http::assertSentCount(3);
         Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
             && $request['chat_id'] === -100123456789
-            && str_contains($request['text'], '🍽️ ORDER IS NOW OPEN!')
-            && str_contains($request['text'], '📝 Session: Dinner')
-            && str_contains($request['text'], 'Everyone can order now! Open the menu, select your food and drinks, and submit your order before the deadline.')
-            && str_contains($request['text'], '⏰ Order closes:')
-            && str_contains($request['text'], 'Click below to place your order.')
+            && $request['text'] === "តោះមេៗអាច Order Drink អីឡូវ​បាន\n\nPlease Click <b>Order Now</b>"
+            && $request['parse_mode'] === 'HTML'
             && ($request['reply_markup']['inline_keyboard'][0][0] ?? null) === [
-                'text' => '🛒 ORDER NOW',
+                'text' => '🛒 Order Now',
                 'url' => "https://t.me/ordercafe_bot/order?startapp=order_{$session->id}",
             ]);
         Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
             && $request['chat_id'] === -100123456789
-            && str_contains($request['text'], 'Iced Coffee × 5')
-            && str_contains($request['text'], 'Total amount: $12.50'));
+            && str_contains($request['text'], 'Iced Coffee x5 Unit price: 2.5៛; Line total: 12.5៛')
+            && str_contains($request['text'], '<b>Total Price: 12.5៛</b>')
+            && str_contains($request['text'], 'Status: closed'));
         $this->assertDatabaseHas('telegram_messages', [
             'order_session_id' => $session->id,
             'telegram_chat_id' => -100123456789,
@@ -752,6 +750,297 @@ class ApiBackendTest extends TestCase
             'status' => 'expired',
         ]);
         $this->assertDatabaseCount('orders', 0);
+    }
+
+    public function test_order_items_store_independent_sugar_percentages_without_changing_database_prices(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-SUGAR-001',
+            'title' => 'Sugar Options',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $latte = Product::create(['name' => 'Ice Latte', 'price' => '5000.00', 'is_available' => true]);
+        $americano = Product::create(['name' => 'Americano', 'price' => '4000.00', 'is_available' => true]);
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'user' => json_encode(['id' => 7654001, 'first_name' => 'Dara'], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $session->id,
+            'items' => [[
+                'product_id' => $latte->id,
+                'quantity' => 1,
+                'sugar_percent' => 10,
+            ]],
+        ], ['X-Telegram-Init-Data' => $initData])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('items.0.sugar_percent');
+        $this->assertDatabaseCount('orders', 0);
+
+        $response = $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $session->id,
+            'items' => [
+                ['product_id' => $latte->id, 'quantity' => 1, 'sugar_percent' => 50, 'price' => '0.01'],
+                ['product_id' => $latte->id, 'quantity' => 2, 'sugar_percent' => 75, 'price' => '0.01'],
+                ['product_id' => $americano->id, 'quantity' => 1, 'sugar_percent' => 0],
+                ['product_id' => $americano->id, 'quantity' => 1, 'price' => '0.01'],
+            ],
+        ], ['X-Telegram-Init-Data' => $initData])->assertCreated()
+            ->assertJsonPath('data.total_amount', '23000.00');
+
+        $items = $response->json('data.items');
+        $this->assertSame([50, 75, 0, null], array_column($items, 'sugar_percent'));
+        $this->assertSame(['5000.00', '5000.00', '4000.00', '4000.00'], array_column($items, 'unit_price'));
+        $this->assertSame(4, OrderItem::count());
+    }
+
+    public function test_admin_daily_order_report_uses_business_dates_and_keeps_orders_separate_from_items(): void
+    {
+        config(['app.business_timezone' => 'Asia/Bangkok']);
+        $this->travelTo(Carbon::parse('2026-10-16 01:00:00', 'UTC'));
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $firstCustomer = User::factory()->create([
+            'name' => 'Sok Dara',
+            'telegram_id' => 987654321,
+            'username' => 'sok_dara',
+            'first_name' => 'Sok',
+            'last_name' => 'Dara',
+        ]);
+        $secondCustomer = User::factory()->create([
+            'name' => 'Chan Srey',
+            'telegram_id' => 987654322,
+            'username' => 'chan_srey',
+            'first_name' => 'Chan',
+            'last_name' => 'Srey',
+        ]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-REPORT-001',
+            'title' => 'Morning Drinks',
+            'status' => 'closed',
+            'created_by' => $admin->id,
+        ]);
+        $firstOrder = Order::create([
+            'order_number' => 'ORD-REPORT-001',
+            'order_session_id' => $session->id,
+            'user_id' => $firstCustomer->id,
+            'total_amount' => '14000.00',
+            'status' => 'submitted',
+            'submitted_at' => Carbon::parse('2026-10-15 17:00:00', 'UTC'),
+        ]);
+        OrderItem::create([
+            'order_id' => $firstOrder->id,
+            'product_name' => 'Ice Latte',
+            'unit_price' => '5000.00',
+            'quantity' => 1,
+            'subtotal' => '5000.00',
+            'sugar_percent' => 50,
+        ]);
+        OrderItem::create([
+            'order_id' => $firstOrder->id,
+            'product_name' => 'Ice Latte',
+            'unit_price' => '5000.00',
+            'quantity' => 1,
+            'subtotal' => '5000.00',
+            'sugar_percent' => 50,
+        ]);
+        OrderItem::create([
+            'order_id' => $firstOrder->id,
+            'product_name' => 'Americano',
+            'unit_price' => '4000.00',
+            'quantity' => 1,
+            'subtotal' => '4000.00',
+        ]);
+
+        $secondOrder = Order::create([
+            'order_number' => 'ORD-REPORT-002',
+            'order_session_id' => $session->id,
+            'user_id' => $secondCustomer->id,
+            'total_amount' => '4000.00',
+            'status' => 'submitted',
+            'submitted_at' => Carbon::parse('2026-10-15 18:00:00', 'UTC'),
+        ]);
+        OrderItem::create([
+            'order_id' => $secondOrder->id,
+            'product_name' => 'Americano',
+            'unit_price' => '4000.00',
+            'quantity' => 1,
+            'subtotal' => '4000.00',
+            'sugar_percent' => 0,
+        ]);
+
+        Order::create([
+            'order_number' => 'ORD-REPORT-CANCELLED',
+            'order_session_id' => $session->id,
+            'user_id' => User::factory()->create()->id,
+            'total_amount' => '5000.00',
+            'status' => 'cancelled',
+            'submitted_at' => Carbon::parse('2026-10-15 18:30:00', 'UTC'),
+        ]);
+        $outsideToday = Order::create([
+            'order_number' => 'ORD-REPORT-OLD-DATE',
+            'order_session_id' => $session->id,
+            'user_id' => User::factory()->create()->id,
+            'total_amount' => '1000.00',
+            'status' => 'submitted',
+            'submitted_at' => Carbon::parse('2026-10-15 16:59:59', 'UTC'),
+        ]);
+        OrderItem::create([
+            'order_id' => $outsideToday->id,
+            'product_name' => 'Yesterday Drink',
+            'unit_price' => '1000.00',
+            'quantity' => 1,
+            'subtotal' => '1000.00',
+        ]);
+
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+        $this->getJson('/api/admin/reports/daily-orders')->assertUnauthorized();
+
+        $this->getJson('/api/admin/reports/daily-orders?per_page=1', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('per_page', 1)
+            ->assertJsonPath('filters.date_from', '2026-10-16')
+            ->assertJsonPath('filters.date_to', '2026-10-16')
+            ->assertJsonPath('filters.timezone', 'Asia/Bangkok');
+
+        $this->getJson('/api/admin/reports/daily-orders?search=987654321&date_from=2026-10-16&date_to=2026-10-16&order_session_id='.$session->id, $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.customer.display_name', 'Sok Dara')
+            ->assertJsonPath('data.0.customer.telegram_username', '@sok_dara')
+            ->assertJsonPath('data.0.customer.telegram_user_id', 987654321)
+            ->assertJsonPath('data.0.order.session.name', 'Morning Drinks')
+            ->assertJsonPath('data.0.order.order_total', '14000.00')
+            ->assertJsonPath('data.0.items.0.sugar_percent', 50)
+            ->assertJsonPath('data.0.items.0.quantity', 2)
+            ->assertJsonPath('data.0.items.0.item_subtotal', '10000.00')
+            ->assertJsonPath('data.0.items.1.sugar_percent', null)
+            ->assertJsonPath('data.0.items.1.item_subtotal', '4000.00');
+
+        $this->getJson('/api/admin/reports/daily-orders?search=%40sok_dara', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1);
+        $this->getJson('/api/admin/reports/daily-orders?search=Sok%20Dara', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1);
+        $this->getJson('/api/admin/reports/daily-orders?status=cancelled', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.order.status', 'cancelled');
+
+        $this->travelBack();
+    }
+
+    public function test_expired_session_summaries_group_sugar_and_are_sent_once(): void
+    {
+        config(['services.telegram.bot_token' => 'test-bot-token']);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 501],
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $group = TelegramGroup::create([
+            'telegram_chat_id' => -100123456789,
+            'title' => 'Cafe Group',
+            'group_name' => 'Cafe Group',
+            'verify_token' => 'CAFE-EXPIRY-TOKEN',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-EXPIRE-001',
+            'title' => 'Expired Drinks',
+            'status' => 'open',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subSecond(),
+            'created_by' => $admin->id,
+        ]);
+        $customers = User::factory()->count(3)->create();
+        $orders = [
+            Order::create([
+                'order_number' => 'ORD-EXPIRE-001',
+                'order_session_id' => $session->id,
+                'user_id' => $customers[0]->id,
+                'total_amount' => '5000.00',
+                'status' => 'submitted',
+                'submitted_at' => now()->subMinutes(30),
+            ]),
+            Order::create([
+                'order_number' => 'ORD-EXPIRE-002',
+                'order_session_id' => $session->id,
+                'user_id' => $customers[1]->id,
+                'total_amount' => '14000.00',
+                'status' => 'submitted',
+                'submitted_at' => now()->subMinutes(20),
+            ]),
+            Order::create([
+                'order_number' => 'ORD-EXPIRE-CANCELLED',
+                'order_session_id' => $session->id,
+                'user_id' => $customers[2]->id,
+                'total_amount' => '100000.00',
+                'status' => 'cancelled',
+                'submitted_at' => now()->subMinutes(10),
+            ]),
+        ];
+        foreach ([
+            [$orders[0], 'Ice Latte', '5000.00', 1, '5000.00', 50],
+            [$orders[1], 'Ice Latte', '5000.00', 2, '10000.00', 50],
+            [$orders[1], 'Americano', '4000.00', 1, '4000.00', 0],
+            [$orders[2], 'Cancelled Drink', '100000.00', 1, '100000.00', 25],
+        ] as [$order, $name, $price, $quantity, $subtotal, $sugar]) {
+            OrderItem::create([
+                'order_id' => $order->id,
+                'product_name' => $name,
+                'unit_price' => $price,
+                'quantity' => $quantity,
+                'subtotal' => $subtotal,
+                'sugar_percent' => $sugar,
+            ]);
+        }
+
+        $noOrdersSession = OrderSession::create([
+            'order_number' => 'SESSION-EXPIRE-002',
+            'title' => 'Empty Session',
+            'status' => 'open',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subSecond(),
+            'created_by' => $admin->id,
+        ]);
+
+        Artisan::call('order-sessions:expire');
+        Artisan::call('order-sessions:expire');
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn (HttpRequest $request) => $request['chat_id'] === $group->telegram_chat_id
+            && str_contains($request['text'], 'Session: Expired Drinks')
+            && str_contains($request['text'], 'Status: expired')
+            && str_contains($request['text'], '- Ice Latte 50% x3 Unit price: 5000៛; Line total: 15000៛')
+            && str_contains($request['text'], '- Americano 0% x1 Price: 4000៛')
+            && str_contains($request['text'], '<b>Total Price: 19000៛</b>')
+            && ! str_contains($request['text'], 'Cancelled Drink'));
+        Http::assertSent(fn (HttpRequest $request) => str_contains($request['text'], 'Session: Empty Session')
+            && str_contains($request['text'], 'No orders were placed in this session.'));
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $noOrdersSession->id,
+            'status' => 'expired',
+        ]);
+        $this->assertSame(2, TelegramMessage::whereIn('order_session_id', [$session->id, $noOrdersSession->id])
+            ->where('status', 'sent')
+            ->count());
     }
 
     private function signedInitData(string $botToken, array $params): string

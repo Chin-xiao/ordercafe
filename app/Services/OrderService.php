@@ -12,6 +12,8 @@ use Illuminate\Validation\ValidationException;
 
 class OrderService
 {
+    public function __construct(private OrderSessionService $orderSessionService) {}
+
     /**
      * Submit an order for a user within an active order session.
      *
@@ -45,7 +47,6 @@ class OrderService
             // 3. Verify session expiration time
             if (!$session->expires_at
                 || $session->expires_at->lessThanOrEqualTo(Carbon::now('UTC'))) {
-                $session->update(['status' => 'expired']);
                 $sessionExpired = true;
                 return null;
             }
@@ -114,6 +115,7 @@ class OrderService
                     'unit_price' => $unitPrice,
                     'quantity' => $quantity,
                     'subtotal' => $subtotal,
+                    'sugar_percent' => $item['sugar_percent'] ?? null,
                 ]);
             }
 
@@ -131,6 +133,8 @@ class OrderService
         });
 
         if ($sessionExpired) {
+            $this->orderSessionService->expireSessions();
+
             throw ValidationException::withMessages([
                 'order_session_id' => ['The time window for this order session has expired.'],
             ]);

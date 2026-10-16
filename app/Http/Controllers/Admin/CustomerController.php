@@ -277,6 +277,7 @@ class CustomerController extends Controller
                 'product_id' => $item->product_id,
                 'product_name' => $item->product_name,
                 'unit_price' => $item->unit_price,
+                'sugar_percent' => $item->sugar_percent,
                 'quantity' => $item->quantity,
                 'subtotal' => $item->subtotal,
             ])->values(),
