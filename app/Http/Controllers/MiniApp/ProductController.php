@@ -6,13 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Models\User;
 use App\Services\MiniAppCatalogCache;
+use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(MiniAppCatalogCache::remember(
+        $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::PRODUCTS_KEY,
             fn () => [
                 'data' => Product::query()
@@ -28,12 +30,15 @@ class ProductController extends Controller
                     ->toArray(),
                 'sugar_percent_options' => OrderItem::allowedSugarPercentages(),
             ]
-        ));
+        );
+        $catalog['private_messaging'] = $this->privateMessagingDetails($request->user());
+
+        return response()->json($catalog);
     }
 
-    public function categories()
+    public function categories(Request $request)
     {
-        return response()->json(MiniAppCatalogCache::remember(
+        $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::CATEGORIES_KEY,
             fn () => [
                 'data' => Category::query()
@@ -48,6 +53,23 @@ class ProductController extends Controller
                     ->toArray(),
                 'sugar_percent_options' => OrderItem::allowedSugarPercentages(),
             ]
-        ));
+        );
+        $catalog['private_messaging'] = $this->privateMessagingDetails($request->user());
+
+        return response()->json($catalog);
+    }
+
+    private function privateMessagingDetails(User $customer): array
+    {
+        $activated = $customer->telegram_private_chat_id !== null
+            && $customer->telegram_private_chat_activated_at !== null;
+        $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
+
+        return [
+            'activated' => $activated,
+            'activation_url' => $activated
+                ? null
+                : "https://t.me/{$botUsername}?start=order_notifications",
+        ];
     }
 }

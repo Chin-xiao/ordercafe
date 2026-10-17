@@ -10,6 +10,7 @@ class TelegramCustomerMessage extends Model
         'customer_id',
         'admin_id',
         'message_text',
+        'idempotency_key',
         'status',
         'telegram_message_id',
         'error_message',

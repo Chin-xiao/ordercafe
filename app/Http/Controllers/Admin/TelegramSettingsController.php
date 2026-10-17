@@ -11,19 +11,18 @@ class TelegramSettingsController extends Controller
 {
     public function show()
     {
-        $group = TelegramGroup::first();
+        $group = TelegramGroup::query()
+            ->where('is_verified', false)
+            ->whereNull('telegram_chat_id')
+            ->whereNotNull('verify_token')
+            ->latest('id')
+            ->first()
+            ?? TelegramGroup::query()->latest('id')->first();
 
-        if (!$group || empty($group->verify_token)) {
-            $attributes = [
-                'verify_token' => 'CAFE_' . strtoupper(Str::random(32)),
-                'is_verified' => false,
-            ];
-
-            if ($group) {
-                $group->update($attributes);
-            } else {
-                $group = TelegramGroup::create($attributes);
-            }
+        if (! $group) {
+            $group = $this->createPendingGroup();
+        } elseif (empty($group->verify_token)) {
+            $group = $this->createPendingGroup();
         }
 
         return response()->json([
@@ -40,14 +39,7 @@ class TelegramSettingsController extends Controller
 
     public function regenerate()
     {
-        $group = TelegramGroup::first() ?? new TelegramGroup();
-        $group->verify_token = 'CAFE_' . strtoupper(Str::random(32));
-        $group->telegram_chat_id = null;
-        $group->title = null;
-        $group->group_name = null;
-        $group->is_verified = false;
-        $group->is_active = true;
-        $group->save();
+        $group = $this->createPendingGroup();
 
         return response()->json([
             'success' => true,
@@ -57,8 +49,17 @@ class TelegramSettingsController extends Controller
                 'setup_command' => '/setup ' . $group->verify_token,
                 'is_verified' => $group->is_verified,
                 'group_name' => $group->group_name,
-                'chat_id' => $group->chat_id,
+                'chat_id' => $group->telegram_chat_id,
             ]
+        ]);
+    }
+
+    private function createPendingGroup(): TelegramGroup
+    {
+        return TelegramGroup::create([
+            'verify_token' => 'CAFE_' . strtoupper(Str::random(32)),
+            'is_verified' => false,
+            'is_active' => true,
         ]);
     }
 }

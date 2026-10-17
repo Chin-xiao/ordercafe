@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\TelegramDeliveryException;
 use App\Services\TelegramService;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +25,7 @@ class CustomerController extends Controller
         $filters = $this->dateFilters($request, [
             'search' => ['sometimes', 'string', 'max:100'],
             'include_inactive' => ['sometimes', 'boolean'],
+            'include_without_orders' => ['sometimes', 'boolean'],
         ]);
         $validated = $filters['validated'];
         $query = User::query()->whereNotNull('telegram_id');
@@ -32,11 +34,13 @@ class CustomerController extends Controller
             $query->where('is_active', true);
         }
 
-        $query->whereHas('orders', fn ($orders) => $this->applyDateRange(
-            $orders,
-            $filters['from'],
-            $filters['to_exclusive']
-        ));
+        if (! ($validated['include_without_orders'] ?? false)) {
+            $query->whereHas('orders', fn ($orders) => $this->applyDateRange(
+                $orders,
+                $filters['from'],
+                $filters['to_exclusive']
+            ));
+        }
 
         if (! empty($validated['search'])) {
             $search = trim($validated['search']);
@@ -119,9 +123,33 @@ class CustomerController extends Controller
     {
         abort_if($customer->telegram_id === null || $customer->is_admin, 404);
 
-        $validated = $request->validate([
-            'message' => ['required', 'string', 'max:4096'],
+        $request->merge([
+            'idempotency_key' => $request->header('Idempotency-Key'),
         ]);
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:4096', 'not_regex:/^\s*$/u'],
+            'idempotency_key' => [
+                'required',
+                'string',
+                'max:191',
+                'regex:/^[A-Za-z0-9._:-]+$/',
+            ],
+        ]);
+
+        $adminId = $request->user()->id;
+        $existingDelivery = TelegramCustomerMessage::query()
+            ->where('admin_id', $adminId)
+            ->where('idempotency_key', $validated['idempotency_key'])
+            ->first();
+
+        if ($existingDelivery) {
+            return $this->duplicateMessageResponse(
+                $existingDelivery,
+                $customer,
+                $validated['message']
+            );
+        }
 
         if ($customer->telegram_private_chat_id === null
             || $customer->telegram_private_chat_activated_at === null) {
@@ -132,12 +160,21 @@ class CustomerController extends Controller
             ], 409);
         }
 
-        $delivery = TelegramCustomerMessage::create([
-            'customer_id' => $customer->id,
-            'admin_id' => $request->user()->id,
-            'message_text' => $validated['message'],
-            'status' => 'pending',
-        ]);
+        $delivery = TelegramCustomerMessage::query()->firstOrCreate(
+            [
+                'admin_id' => $adminId,
+                'idempotency_key' => $validated['idempotency_key'],
+            ],
+            [
+                'customer_id' => $customer->id,
+                'message_text' => $validated['message'],
+                'status' => 'pending',
+            ]
+        );
+
+        if (! $delivery->wasRecentlyCreated) {
+            return $this->duplicateMessageResponse($delivery, $customer, $validated['message']);
+        }
 
         try {
             $telegramMessageId = $this->telegramService->sendMessage(
@@ -161,6 +198,13 @@ class CustomerController extends Controller
                 'error_message' => $exception->getMessage(),
             ]);
             [$errorCode, $customerMessage, $statusCode] = $this->privateMessageFailure($exception);
+
+            if (in_array($errorCode, ['BOT_BLOCKED_BY_CUSTOMER', 'PRIVATE_CHAT_UNAVAILABLE'], true)) {
+                $customer->forceFill([
+                    'telegram_private_chat_id' => null,
+                    'telegram_private_chat_activated_at' => null,
+                ])->save();
+            }
 
             Log::warning('Private Telegram customer message delivery failed.', [
                 'customer_id' => $customer->id,
@@ -252,6 +296,10 @@ class CustomerController extends Controller
 
     private function presentCustomerIdentity(User $customer): array
     {
+        $privateChatActivated = $customer->telegram_private_chat_id !== null
+            && $customer->telegram_private_chat_activated_at !== null;
+        $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
+
         return [
             'id' => $customer->id,
             'telegram_user_id' => $customer->telegram_id,
@@ -259,9 +307,11 @@ class CustomerController extends Controller
             'first_name' => $customer->first_name,
             'last_name' => $customer->last_name,
             'display_name' => $customer->name,
-            'private_chat_activated' => $customer->telegram_private_chat_id !== null
-                && $customer->telegram_private_chat_activated_at !== null,
+            'private_chat_activated' => $privateChatActivated,
             'private_chat_activated_at' => $customer->telegram_private_chat_activated_at,
+            'private_chat_activation_url' => $privateChatActivated
+                ? null
+                : "https://t.me/{$botUsername}?start=order_notifications",
             'telegram_last_seen_at' => $customer->telegram_last_seen_at,
             'is_active' => $customer->is_active,
         ];
@@ -312,6 +362,37 @@ class CustomerController extends Controller
             'created_at' => $delivery->created_at,
             'sent_at' => $delivery->sent_at,
         ];
+    }
+
+    private function duplicateMessageResponse(
+        TelegramCustomerMessage $delivery,
+        User $customer,
+        string $message
+    ): JsonResponse {
+        if ($delivery->customer_id !== $customer->id || $delivery->message_text !== $message) {
+            return response()->json([
+                'message' => 'This Idempotency-Key was already used for a different message.',
+                'delivered' => false,
+                'error_code' => 'IDEMPOTENCY_KEY_REUSED',
+            ], 409);
+        }
+
+        if ($delivery->status === 'sent') {
+            return response()->json([
+                'message' => 'The private Telegram message was delivered.',
+                'delivered' => true,
+                'data' => $this->presentMessage($delivery),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'This message request was already attempted and will not be sent again. Use a new key only for a deliberate new message.',
+            'delivered' => false,
+            'error_code' => $delivery->status === 'pending'
+                ? 'MESSAGE_REQUEST_PENDING'
+                : 'MESSAGE_REQUEST_ALREADY_ATTEMPTED',
+            'data' => $this->presentMessage($delivery),
+        ], 409);
     }
 
     private function privateMessageFailure(TelegramDeliveryException $exception): array

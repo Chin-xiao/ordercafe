@@ -45,6 +45,8 @@ class CustomerManagementTest extends TestCase
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.telegram_user_id', 812345678)
             ->assertJsonPath('data.0.telegram_username', 'case_customer')
+            ->assertJsonPath('data.0.private_chat_activated', false)
+            ->assertJsonPath('data.0.private_chat_activation_url', 'https://t.me/ahseven_bot?start=order_notifications')
             ->assertJsonPath('data.0.order_count', 3)
             ->assertJsonPath('data.0.total_spending', '10.00')
             ->assertJsonPath('filters.timezone', 'Asia/Bangkok')
@@ -55,8 +57,40 @@ class CustomerManagementTest extends TestCase
     public function test_customer_admin_routes_require_an_authenticated_admin(): void
     {
         $this->getJson('/api/admin/customers')->assertUnauthorized();
+        $customer = $this->customer(812345677);
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => 'Unauthorized send attempt.',
+        ], ['Idempotency-Key' => 'unauthorized-message'])->assertUnauthorized();
         $nonAdmin = User::factory()->create(['is_admin' => false, 'is_active' => true]);
         $this->getJson('/api/admin/customers', $this->headers($nonAdmin))->assertForbidden();
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => 'Unauthorized send attempt.',
+        ], $this->headers($nonAdmin) + ['Idempotency-Key' => 'non-admin-message'])->assertForbidden();
+    }
+
+    public function test_admin_can_list_verified_mini_app_customers_before_they_place_an_order(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $this->customer(812345676, [
+            'username' => 'mini_app_only',
+            'first_name' => 'Mini',
+            'last_name' => 'App',
+            'name' => 'Mini App',
+        ]);
+        $headers = $this->headers($admin);
+
+        $this->getJson('/api/admin/customers', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 0);
+        $this->getJson('/api/admin/customers?include_without_orders=1', $headers)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.telegram_user_id', 812345676)
+            ->assertJsonPath('data.0.telegram_username', 'mini_app_only')
+            ->assertJsonPath('data.0.display_name', 'Mini App')
+            ->assertJsonPath('data.0.private_chat_activated', false)
+            ->assertJsonPath('data.0.private_chat_activation_url', 'https://t.me/ahseven_bot?start=order_notifications')
+            ->assertJsonPath('data.0.order_count', 0);
     }
 
     public function test_customer_list_defaults_to_today_and_rejects_invalid_date_ranges(): void
@@ -189,10 +223,19 @@ class CustomerManagementTest extends TestCase
                 'ok' => false,
                 'error_code' => 403,
                 'description' => 'Forbidden: bot was blocked by the user',
-            ], 403);
+            ], 403)
+            ->push([
+                'ok' => false,
+                'error_code' => 400,
+                'description' => 'Bad Request: chat not found',
+            ], 400);
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Your order is ready.',
-        ], $headers)->assertOk()
+        ], $headers)->assertUnprocessable()
+            ->assertJsonValidationErrors('idempotency_key');
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => 'Your order is ready.',
+        ], $headers + ['Idempotency-Key' => 'ready-order-001'])->assertOk()
             ->assertJsonPath('delivered', true)
             ->assertJsonPath('data.status', 'sent')
             ->assertJsonPath('data.telegram_message_id', 246)
@@ -200,17 +243,48 @@ class CustomerManagementTest extends TestCase
             ->assertJsonPath('data.message', 'Your order is ready.');
 
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => '   ',
+        ], $headers + ['Idempotency-Key' => 'blank-message'])->assertUnprocessable()
+            ->assertJsonValidationErrors('message');
+
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => 'Your order is ready.',
+        ], $headers + ['Idempotency-Key' => 'ready-order-001'])->assertOk()
+            ->assertJsonPath('delivered', true)
+            ->assertJsonPath('data.telegram_message_id', 246);
+        Http::assertSentCount(1);
+
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
+            'message' => 'A different message.',
+        ], $headers + ['Idempotency-Key' => 'ready-order-001'])->assertStatus(409)
+            ->assertJsonPath('error_code', 'IDEMPOTENCY_KEY_REUSED');
+
+        $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Second attempt.',
-        ], $headers)->assertStatus(403)
+        ], $headers + ['Idempotency-Key' => 'ready-order-002'])->assertStatus(403)
             ->assertJsonPath('delivered', false)
             ->assertJsonPath('error_code', 'BOT_BLOCKED_BY_CUSTOMER')
             ->assertJsonPath('data.status', 'failed')
             ->assertJsonPath('data.telegram_message_id', null)
             ->assertJsonPath('error', 'The customer blocked @ahseven_bot. They must unblock the bot before Telegram can deliver private messages.');
 
-        $this->assertDatabaseCount('telegram_customer_messages', 2);
+        $this->assertNull($customer->fresh()->telegram_private_chat_id);
+        $this->assertNull($customer->fresh()->telegram_private_chat_activated_at);
+        $invalidChatCustomer = $this->customer(856789124, [
+            'telegram_private_chat_id' => 856789124,
+            'telegram_private_chat_activated_at' => now(),
+        ]);
+        $this->postJson("/api/admin/customers/{$invalidChatCustomer->id}/messages", [
+            'message' => 'Please check your private chat.',
+        ], $headers + ['Idempotency-Key' => 'invalid-private-chat'])->assertStatus(409)
+            ->assertJsonPath('error_code', 'PRIVATE_CHAT_UNAVAILABLE')
+            ->assertJsonPath('data.status', 'failed');
+        $this->assertNull($invalidChatCustomer->fresh()->telegram_private_chat_id);
+        $this->assertNull($invalidChatCustomer->fresh()->telegram_private_chat_activated_at);
+
+        $this->assertDatabaseCount('telegram_customer_messages', 3);
         $this->assertSame(
-            ['sent', 'failed'],
+            ['sent', 'failed', 'failed'],
             TelegramCustomerMessage::query()->orderBy('id')->pluck('status')->all()
         );
         Http::assertSent(fn ($request) => $request['chat_id'] === 856789123);
@@ -274,7 +348,7 @@ class CustomerManagementTest extends TestCase
         $adminHeaders = $this->headers($admin);
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Your drink is ready.',
-        ], $adminHeaders)->assertStatus(409)
+        ], $adminHeaders + ['Idempotency-Key' => 'drink-ready-before-start'])->assertStatus(409)
             ->assertJsonPath('delivered', false)
             ->assertJsonPath('error_code', 'PRIVATE_CHAT_NOT_STARTED');
         Http::assertNothingSent();
@@ -297,6 +371,13 @@ class CustomerManagementTest extends TestCase
         $this->assertSame('Known', $customer->first_name);
         $this->assertSame('Customer', $customer->last_name);
         $this->assertSame('Known Customer', $customer->name);
+        $this->getJson('/api/admin/customers', $adminHeaders)->assertOk()
+            ->assertJsonPath('data.0.private_chat_activated', true)
+            ->assertJsonPath('data.0.private_chat_activation_url', null);
+        $this->getJson('/api/mini-app/products', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('private_messaging.activated', true)
+            ->assertJsonPath('private_messaging.activation_url', null);
 
         $this->postJson('/api/telegram/webhook', [
             'update_id' => 91001,
@@ -313,7 +394,7 @@ class CustomerManagementTest extends TestCase
 
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Your drink is ready.',
-        ], $adminHeaders)->assertOk()
+        ], $adminHeaders + ['Idempotency-Key' => 'drink-ready-after-start'])->assertOk()
             ->assertJsonPath('delivered', true)
             ->assertJsonPath('data.status', 'sent');
         Http::assertSentCount(2);
@@ -357,6 +438,147 @@ class CustomerManagementTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_private_start_does_not_create_or_link_an_unverified_customer(): void
+    {
+        config([
+            'services.telegram.bot_token' => 'test-private-start-bot-token',
+            'services.telegram.webhook_secret' => 'configured-webhook-secret',
+        ]);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 778],
+            ]),
+        ]);
+
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 92002,
+            'message' => [
+                'text' => '/start order_notifications',
+                'chat' => ['id' => 899123457, 'type' => 'private'],
+                'from' => ['id' => 899123457],
+            ],
+        ], ['X-Telegram-Bot-Api-Secret-Token' => 'configured-webhook-secret'])->assertOk();
+
+        $this->assertSame(0, User::where('telegram_id', 899123457)->count());
+        $this->assertDatabaseCount('telegram_webhook_updates', 1);
+        Http::assertSent(fn ($request) => $request['chat_id'] === 899123457
+            && str_contains($request['text'], 'open the Mini App'));
+    }
+
+    public function test_admin_can_create_multiple_group_tokens_without_unlinking_verified_groups(): void
+    {
+        config([
+            'services.telegram.bot_token' => 'test-group-bot-token',
+            'services.telegram.webhook_secret' => 'configured-webhook-secret',
+        ]);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 779],
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $existing = \App\Models\TelegramGroup::create([
+            'telegram_chat_id' => -100123456789,
+            'title' => 'Existing Cafe Group',
+            'group_name' => 'Existing Cafe Group',
+            'verify_token' => 'EXISTING-GROUP-TOKEN',
+            'is_verified' => true,
+            'is_active' => false,
+        ]);
+        $headers = $this->headers($admin);
+        $this->getJson('/api/admin/telegram-settings')->assertUnauthorized();
+        $this->postJson('/api/admin/telegram-settings/regenerate')->assertUnauthorized();
+
+        $this->getJson('/api/admin/telegram-settings', $headers)
+            ->assertOk()
+            ->assertJsonPath('data.chat_id', -100123456789)
+            ->assertJsonPath('data.is_verified', true);
+
+        $firstToken = $this->postJson('/api/admin/telegram-settings/regenerate', [], $headers)
+            ->assertOk()
+            ->assertJsonPath('data.chat_id', null)
+            ->assertJsonPath('data.is_verified', false)
+            ->json('data.verify_token');
+        $secondToken = $this->postJson('/api/admin/telegram-settings/regenerate', [], $headers)
+            ->assertOk()
+            ->assertJsonPath('data.chat_id', null)
+            ->assertJsonPath('data.is_verified', false)
+            ->json('data.verify_token');
+
+        $webhookHeaders = ['X-Telegram-Bot-Api-Secret-Token' => 'configured-webhook-secret'];
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 93001,
+            'message' => [
+                'text' => '/setup@ahseven_bot '.$firstToken,
+                'chat' => ['id' => -100200000001, 'type' => 'supergroup', 'title' => 'New Group One'],
+                'from' => ['id' => 123456789],
+            ],
+        ], $webhookHeaders)->assertOk();
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 93002,
+            'message' => [
+                'text' => '/setup '.$secondToken,
+                'chat' => ['id' => -100200000002, 'type' => 'group', 'title' => 'New Group Two'],
+                'from' => ['id' => 123456789],
+            ],
+        ], $webhookHeaders)->assertOk()->assertJsonMissingPath('duplicate');
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 93005,
+            'message' => [
+                'text' => '/setup@ahseven_bot '.$firstToken,
+                'chat' => ['id' => -100200000001, 'type' => 'supergroup', 'title' => 'New Group One'],
+                'from' => ['id' => 123456789],
+            ],
+        ], $webhookHeaders)->assertOk();
+
+        $this->assertDatabaseCount('telegram_groups', 3);
+        $this->assertDatabaseHas('telegram_groups', [
+            'id' => $existing->id,
+            'telegram_chat_id' => -100123456789,
+            'group_name' => 'Existing Cafe Group',
+            'is_verified' => true,
+            'is_active' => false,
+        ]);
+        $this->assertDatabaseHas('telegram_groups', [
+            'verify_token' => $firstToken,
+            'telegram_chat_id' => -100200000001,
+            'group_name' => 'New Group One',
+            'is_verified' => true,
+        ]);
+        $this->assertDatabaseHas('telegram_groups', [
+            'verify_token' => $secondToken,
+            'telegram_chat_id' => -100200000002,
+            'group_name' => 'New Group Two',
+            'is_verified' => true,
+        ]);
+
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 93003,
+            'message' => [
+                'text' => '/setup INVALID_TOKEN',
+                'chat' => ['id' => -100200000003, 'type' => 'supergroup', 'title' => 'Unauthorized Group'],
+                'from' => ['id' => 123456789],
+            ],
+        ], $webhookHeaders)->assertOk();
+        $this->postJson('/api/telegram/webhook', [
+            'update_id' => 93004,
+            'message' => [
+                'text' => '/setup '.$firstToken,
+                'chat' => ['id' => -100200000003, 'type' => 'supergroup', 'title' => 'Unauthorized Group'],
+                'from' => ['id' => 123456789],
+            ],
+        ], $webhookHeaders)->assertOk();
+        Http::assertSent(fn ($request) => $request['chat_id'] === -100200000002);
+        $this->assertDatabaseCount('telegram_groups', 3);
+        Http::assertSent(fn ($request) => $request['chat_id'] === -100200000003
+            && str_contains($request['text'], 'Invalid or expired group verification token'));
+        Http::assertSent(fn ($request) => $request['chat_id'] === -100200000003
+            && str_contains($request['text'], 'already been used'));
+    }
+
     public function test_telegram_rate_limits_are_reported_and_include_retry_after(): void
     {
         config(['services.telegram.bot_token' => 'test-message-bot-token']);
@@ -376,7 +598,7 @@ class CustomerManagementTest extends TestCase
 
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Please wait.',
-        ], $this->headers($admin))->assertStatus(429)
+        ], $this->headers($admin) + ['Idempotency-Key' => 'rate-limit-message'])->assertStatus(429)
             ->assertHeader('Retry-After', '12')
             ->assertJsonPath('delivered', false)
             ->assertJsonPath('error_code', 'TELEGRAM_RATE_LIMITED')
@@ -396,7 +618,7 @@ class CustomerManagementTest extends TestCase
 
         $this->postJson("/api/admin/customers/{$customer->id}/messages", [
             'message' => 'Please contact us.',
-        ], $this->headers($admin))->assertStatus(502)
+        ], $this->headers($admin) + ['Idempotency-Key' => 'network-error-message'])->assertStatus(502)
             ->assertJsonPath('delivered', false)
             ->assertJsonPath('error_code', 'TELEGRAM_NETWORK_ERROR')
             ->assertJsonPath('data.status', 'failed');

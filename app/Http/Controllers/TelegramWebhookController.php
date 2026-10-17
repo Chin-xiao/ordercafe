@@ -155,11 +155,42 @@ class TelegramWebhookController extends Controller
             return;
         }
 
-        $customer = DB::transaction(function () use ($chat, $sender): User {
+        $customer = User::query()
+            ->where('telegram_id', (int) $sender['id'])
+            ->where('is_admin', false)
+            ->first();
+
+        if (! $customer) {
+            $this->telegramService->sendMessage(
+                (int) $chat['id'],
+                'Please open the Mini App from your cafe group first. Once your verified customer profile exists, send /start again to enable private messages.'
+            );
+
+            return;
+        }
+
+        $chatAlreadyLinked = User::query()
+            ->where('telegram_private_chat_id', (int) $chat['id'])
+            ->whereKeyNot($customer->id)
+            ->exists();
+
+        if ($chatAlreadyLinked) {
+            $this->telegramService->sendMessage(
+                (int) $chat['id'],
+                'This private chat could not be linked to your customer account. Please contact an administrator.'
+            );
+
+            return;
+        }
+
+        $customer = DB::transaction(function () use ($chat, $sender, $customer): User {
             $customer = $this->customerIdentity->sync($sender);
+            $chatId = (int) $chat['id'];
             $customer->forceFill([
-                'telegram_private_chat_id' => (int) $chat['id'],
-                'telegram_private_chat_activated_at' => now('UTC'),
+                'telegram_private_chat_id' => $chatId,
+                'telegram_private_chat_activated_at' => $customer->telegram_private_chat_id === $chatId
+                    ? ($customer->telegram_private_chat_activated_at ?? now('UTC'))
+                    : now('UTC'),
             ])->save();
 
             return $customer;
@@ -179,36 +210,70 @@ class TelegramWebhookController extends Controller
         }
 
         $chat = $message['chat'] ?? null;
-        if (! is_array($chat) || ! $this->isTelegramId($chat['id'] ?? null)) {
+        if (! is_array($chat)
+            || ! in_array($chat['type'] ?? null, ['group', 'supergroup'], true)
+            || ! $this->isTelegramId($chat['id'] ?? null)
+            || (int) $chat['id'] >= 0) {
             return;
         }
 
         $text = trim($message['text']);
-        if (! preg_match('/^\\/setup(?:@[A-Za-z0-9_]+)?(?:\\s+(.+))?$/D', $text, $matches)) {
+        if (! preg_match('/^\\/setup(?:@([A-Za-z0-9_]+))?(?:\\s+([A-Za-z0-9_-]+))?\\s*$/D', $text, $matches)) {
             return;
         }
 
-        $token = trim($matches[1] ?? '');
+        $targetBot = $matches[1] ?? null;
+        $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
+        if (is_string($targetBot) && $targetBot !== '' && strcasecmp($targetBot, $botUsername) !== 0) {
+            return;
+        }
+
+        $token = trim($matches[2] ?? '');
         $group = TelegramGroup::query()->where('verify_token', $token)->first();
         if (! $group) {
             $this->telegramService->sendMessage(
-                $chat['id'],
-                '❌ Invalid verification token.'
+                (int) $chat['id'],
+                'Invalid or expired group verification token. Generate a new token in Admin settings.'
+            );
+
+            return;
+        }
+
+        if ($group->is_verified && (int) $group->telegram_chat_id !== (int) $chat['id']) {
+            $this->telegramService->sendMessage(
+                (int) $chat['id'],
+                'This verification token has already been used. Generate a new token in Admin settings for another group.'
+            );
+
+            return;
+        }
+
+        $chatAlreadyLinked = TelegramGroup::query()
+            ->where('telegram_chat_id', (int) $chat['id'])
+            ->whereKeyNot($group->id)
+            ->exists();
+
+        if ($chatAlreadyLinked) {
+            $this->telegramService->sendMessage(
+                (int) $chat['id'],
+                'This Telegram group is already linked to another verification record.'
             );
 
             return;
         }
 
         $groupName = is_string($chat['title'] ?? null) ? $chat['title'] : 'Telegram Group';
-        $group->telegram_chat_id = $chat['id'];
-        $group->title = $groupName;
-        $group->group_name = $groupName;
-        $group->is_verified = true;
-        $group->save();
+        DB::transaction(function () use ($group, $chat, $groupName): void {
+            $group->telegram_chat_id = (int) $chat['id'];
+            $group->title = $groupName;
+            $group->group_name = $groupName;
+            $group->is_verified = true;
+            $group->save();
+        });
 
         $this->telegramService->sendMessage(
-            $chat['id'],
-            '✅ Group successfully verified and linked to the Cafe Ordering system!'
+            (int) $chat['id'],
+            'Group successfully verified and linked to the Cafe Ordering system.'
         );
     }
 

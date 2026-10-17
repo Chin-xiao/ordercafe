@@ -120,6 +120,14 @@ class ApiBackendTest extends TestCase
             ], JSON_THROW_ON_ERROR),
         ]);
 
+        $this->getJson('/api/mini-app/products', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('private_messaging.activated', false)
+            ->assertJsonPath(
+                'private_messaging.activation_url',
+                'https://t.me/ahseven_bot?start=order_notifications'
+            );
+
         $this->postJson('/api/mini-app/orders', [
             'order_session_id' => $session->id,
             'items' => [[
