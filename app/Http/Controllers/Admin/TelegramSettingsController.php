@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\TelegramGroup;
-use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class TelegramSettingsController extends Controller
@@ -16,12 +15,9 @@ class TelegramSettingsController extends Controller
             ->whereNull('telegram_chat_id')
             ->whereNotNull('verify_token')
             ->latest('id')
-            ->first()
-            ?? TelegramGroup::query()->latest('id')->first();
+            ->first();
 
         if (! $group) {
-            $group = $this->createPendingGroup();
-        } elseif (empty($group->verify_token)) {
             $group = $this->createPendingGroup();
         }
 
@@ -29,11 +25,11 @@ class TelegramSettingsController extends Controller
             'success' => true,
             'data' => [
                 'verify_token' => $group->verify_token,
-                'setup_command' => '/setup ' . $group->verify_token,
+                'setup_command' => '/setup '.$group->verify_token,
                 'is_verified' => $group->is_verified,
                 'group_name' => $group->group_name ?: $group->title,
                 'chat_id' => $group->telegram_chat_id,
-            ]
+            ],
         ]);
     }
 
@@ -46,18 +42,18 @@ class TelegramSettingsController extends Controller
             'message' => 'New verification token generated.',
             'data' => [
                 'verify_token' => $group->verify_token,
-                'setup_command' => '/setup ' . $group->verify_token,
+                'setup_command' => '/setup '.$group->verify_token,
                 'is_verified' => $group->is_verified,
                 'group_name' => $group->group_name,
                 'chat_id' => $group->telegram_chat_id,
-            ]
+            ],
         ]);
     }
 
     private function createPendingGroup(): TelegramGroup
     {
         return TelegramGroup::create([
-            'verify_token' => 'CAFE_' . strtoupper(Str::random(32)),
+            'verify_token' => 'CAFE_'.strtoupper(Str::random(32)),
             'is_verified' => false,
             'is_active' => true,
         ]);

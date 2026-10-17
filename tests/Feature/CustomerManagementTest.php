@@ -7,6 +7,7 @@ use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Models\Product;
 use App\Models\TelegramCustomerMessage;
+use App\Models\TelegramGroup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
@@ -480,7 +481,7 @@ class CustomerManagementTest extends TestCase
         ]);
 
         $admin = User::factory()->create(['is_admin' => true]);
-        $existing = \App\Models\TelegramGroup::create([
+        $existing = TelegramGroup::create([
             'telegram_chat_id' => -100123456789,
             'title' => 'Existing Cafe Group',
             'group_name' => 'Existing Cafe Group',
@@ -492,16 +493,20 @@ class CustomerManagementTest extends TestCase
         $this->getJson('/api/admin/telegram-settings')->assertUnauthorized();
         $this->postJson('/api/admin/telegram-settings/regenerate')->assertUnauthorized();
 
-        $this->getJson('/api/admin/telegram-settings', $headers)
-            ->assertOk()
-            ->assertJsonPath('data.chat_id', -100123456789)
-            ->assertJsonPath('data.is_verified', true);
-
-        $firstToken = $this->postJson('/api/admin/telegram-settings/regenerate', [], $headers)
+        $initialToken = $this->getJson('/api/admin/telegram-settings', $headers)
             ->assertOk()
             ->assertJsonPath('data.chat_id', null)
             ->assertJsonPath('data.is_verified', false)
             ->json('data.verify_token');
+        $this->assertNotSame('EXISTING-GROUP-TOKEN', $initialToken);
+        $this->assertDatabaseHas('telegram_groups', [
+            'id' => $existing->id,
+            'telegram_chat_id' => -100123456789,
+            'is_verified' => true,
+            'is_active' => false,
+        ]);
+
+        $firstToken = $initialToken;
         $secondToken = $this->postJson('/api/admin/telegram-settings/regenerate', [], $headers)
             ->assertOk()
             ->assertJsonPath('data.chat_id', null)
