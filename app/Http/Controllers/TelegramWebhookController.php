@@ -3,51 +3,227 @@
 namespace App\Http\Controllers;
 
 use App\Models\TelegramGroup;
+use App\Models\User;
+use App\Services\TelegramCustomerIdentity;
+use App\Services\TelegramDeliveryException;
 use App\Services\TelegramService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class TelegramWebhookController extends Controller
 {
-    public function __construct(private TelegramService $telegramService)
-    {
-    }
+    public function __construct(
+        private TelegramService $telegramService,
+        private TelegramCustomerIdentity $customerIdentity
+    ) {}
 
-    public function handle(Request $request)
+    public function handle(Request $request): JsonResponse
     {
+        $secret = config('services.telegram.webhook_secret');
+        if (! is_string($secret) || $secret === '') {
+            Log::error('Telegram webhook rejected because its secret is not configured.');
+
+            return response()->json([
+                'message' => 'Telegram webhook is not configured.',
+                'error_code' => 'WEBHOOK_NOT_CONFIGURED',
+            ], 503);
+        }
+
+        $providedSecret = $request->header('X-Telegram-Bot-Api-Secret-Token');
+        if (! is_string($providedSecret) || ! hash_equals($secret, $providedSecret)) {
+            Log::warning('Telegram webhook request failed secret verification.');
+
+            return response()->json([
+                'message' => 'Unauthorized Telegram webhook request.',
+                'error_code' => 'WEBHOOK_UNAUTHORIZED',
+            ], 401);
+        }
+
         $update = $request->all();
+        $updateId = $update['update_id'] ?? null;
+        if (! is_int($updateId) && (! is_string($updateId) || ! ctype_digit($updateId))) {
+            return response()->json([
+                'message' => 'Telegram update ID is missing or invalid.',
+                'error_code' => 'INVALID_UPDATE_ID',
+            ], 400);
+        }
+        $updateId = (int) $updateId;
 
-        if (isset($update['message']['text'])) {
-            $text = $update['message']['text'];
-            $chatId = $update['message']['chat']['id'];
-            $groupName = $update['message']['chat']['title'] ?? 'Telegram Group';
+        if (! $this->claimUpdate($updateId)) {
+            return response()->json(['status' => 'ok', 'duplicate' => true]);
+        }
 
-            // Clean text to handle /setup@ahseven_bot format as well
-            $cleanText = preg_replace('/@\w+/', '', $text); // Removes @ahseven_bot if present
+        try {
+            $this->processPrivateStart($update);
+            $this->processGroupSetup($update);
+            DB::table('telegram_webhook_updates')
+                ->where('update_id', $updateId)
+                ->update([
+                    'status' => 'processed',
+                    'processed_at' => now('UTC'),
+                    'updated_at' => now('UTC'),
+                ]);
+        } catch (TelegramDeliveryException $exception) {
+            $this->markUpdateFailed($updateId);
+            Log::warning('Telegram webhook message processing failed.', [
+                'update_id' => $updateId,
+                'error' => $exception->getMessage(),
+            ]);
 
-            if (str_starts_with(trim($cleanText), '/setup')) {
-                $token = trim(str_replace('/setup', '', $cleanText));
+            return response()->json([
+                'message' => 'Telegram update could not be processed.',
+                'error_code' => 'TELEGRAM_DELIVERY_FAILED',
+            ], 502);
+        } catch (Throwable $exception) {
+            $this->markUpdateFailed($updateId);
+            Log::error('Telegram webhook update processing failed.', [
+                'update_id' => $updateId,
+                'exception' => $exception::class,
+            ]);
 
-                $group = TelegramGroup::where('verify_token', $token)->first();
-                if ($group) {
-                    $group->telegram_chat_id = $chatId;
-                    $group->title = $groupName;
-                    $group->group_name = $groupName;
-                    $group->is_verified = true;
-                    $group->save();
-
-                    $this->telegramService->sendMessage(
-                        $chatId,
-                        '✅ Group successfully verified and linked to the Cafe Ordering system!'
-                    );
-                } else {
-                    $this->telegramService->sendMessage(
-                        $chatId,
-                        "❌ Invalid verification token: {$token}"
-                    );
-                }
-            }
+            throw $exception;
         }
 
         return response()->json(['status' => 'ok']);
+    }
+
+    private function claimUpdate(int $updateId): bool
+    {
+        return DB::transaction(function () use ($updateId): bool {
+            $now = now('UTC');
+            $inserted = DB::table('telegram_webhook_updates')->insertOrIgnore([
+                'update_id' => $updateId,
+                'status' => 'processing',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $update = DB::table('telegram_webhook_updates')
+                ->where('update_id', $updateId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $update) {
+                throw new \RuntimeException('Unable to claim Telegram webhook update.');
+            }
+
+            if ($inserted > 0) {
+                return true;
+            }
+            $staleProcessing = $update->status === 'processing'
+                && $update->updated_at !== null
+                && now('UTC')->diffInSeconds($update->updated_at) >= 120;
+            if ($update->status !== 'failed' && ! $staleProcessing) {
+                return false;
+            }
+
+            DB::table('telegram_webhook_updates')
+                ->where('update_id', $updateId)
+                ->update([
+                    'status' => 'processing',
+                    'updated_at' => $now,
+                ]);
+
+            return true;
+        });
+    }
+
+    private function processPrivateStart(array $update): void
+    {
+        $message = $update['message'] ?? null;
+        if (! is_array($message) || ! is_string($message['text'] ?? null)) {
+            return;
+        }
+
+        if (! preg_match('/^\\/start(?:@[A-Za-z0-9_]+)?(?:\\s+[A-Za-z0-9_-]+)?\\s*$/D', trim($message['text']))) {
+            return;
+        }
+
+        $chat = $message['chat'] ?? null;
+        $sender = $message['from'] ?? null;
+        if (! is_array($chat)
+            || ($chat['type'] ?? null) !== 'private'
+            || ! is_array($sender)
+            || ($sender['is_bot'] ?? false) === true
+            || ! $this->isTelegramId($chat['id'] ?? null)
+            || ! $this->isTelegramId($sender['id'] ?? null)
+            || (int) $chat['id'] <= 0
+            || (int) $sender['id'] <= 0) {
+            return;
+        }
+
+        $customer = DB::transaction(function () use ($chat, $sender): User {
+            $customer = $this->customerIdentity->sync($sender);
+            $customer->forceFill([
+                'telegram_private_chat_id' => (int) $chat['id'],
+                'telegram_private_chat_activated_at' => now('UTC'),
+            ])->save();
+
+            return $customer;
+        });
+
+        $this->telegramService->sendMessage(
+            $customer->telegram_private_chat_id,
+            'Thanks! Private order notifications are now enabled. You can continue ordering in the Mini App.'
+        );
+    }
+
+    private function processGroupSetup(array $update): void
+    {
+        $message = $update['message'] ?? null;
+        if (! is_array($message) || ! is_string($message['text'] ?? null)) {
+            return;
+        }
+
+        $chat = $message['chat'] ?? null;
+        if (! is_array($chat) || ! $this->isTelegramId($chat['id'] ?? null)) {
+            return;
+        }
+
+        $text = trim($message['text']);
+        if (! preg_match('/^\\/setup(?:@[A-Za-z0-9_]+)?(?:\\s+(.+))?$/D', $text, $matches)) {
+            return;
+        }
+
+        $token = trim($matches[1] ?? '');
+        $group = TelegramGroup::query()->where('verify_token', $token)->first();
+        if (! $group) {
+            $this->telegramService->sendMessage(
+                $chat['id'],
+                '❌ Invalid verification token.'
+            );
+
+            return;
+        }
+
+        $groupName = is_string($chat['title'] ?? null) ? $chat['title'] : 'Telegram Group';
+        $group->telegram_chat_id = $chat['id'];
+        $group->title = $groupName;
+        $group->group_name = $groupName;
+        $group->is_verified = true;
+        $group->save();
+
+        $this->telegramService->sendMessage(
+            $chat['id'],
+            '✅ Group successfully verified and linked to the Cafe Ordering system!'
+        );
+    }
+
+    private function markUpdateFailed(int $updateId): void
+    {
+        DB::table('telegram_webhook_updates')
+            ->where('update_id', $updateId)
+            ->update([
+                'status' => 'failed',
+                'updated_at' => now('UTC'),
+            ]);
+    }
+
+    private function isTelegramId(mixed $value): bool
+    {
+        return is_int($value) || (is_string($value) && preg_match('/^-?[0-9]+$/D', $value) === 1);
     }
 }

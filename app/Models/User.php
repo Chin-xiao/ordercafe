@@ -16,6 +16,9 @@ class User extends Authenticatable
         'email',     // <--- Add this
         'password',  // <--- Add this (if not already hidden/guarded)
         'telegram_id',
+        'telegram_private_chat_id',
+        'telegram_private_chat_activated_at',
+        'telegram_last_seen_at',
         'username',
         'first_name',
         'last_name',
@@ -29,6 +32,9 @@ class User extends Authenticatable
         'is_active' => 'boolean',
         'is_admin' => 'boolean',
         'telegram_id' => 'integer',
+        'telegram_private_chat_id' => 'integer',
+        'telegram_private_chat_activated_at' => 'datetime',
+        'telegram_last_seen_at' => 'datetime',
     ];
 
     protected $hidden = [

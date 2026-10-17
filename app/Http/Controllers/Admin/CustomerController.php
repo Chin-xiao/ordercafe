@@ -122,6 +122,16 @@ class CustomerController extends Controller
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:4096'],
         ]);
+
+        if ($customer->telegram_private_chat_id === null
+            || $customer->telegram_private_chat_activated_at === null) {
+            return response()->json([
+                'message' => 'The customer must open @ahseven_bot in a private chat and press Start before private messages can be delivered.',
+                'delivered' => false,
+                'error_code' => 'PRIVATE_CHAT_NOT_STARTED',
+            ], 409);
+        }
+
         $delivery = TelegramCustomerMessage::create([
             'customer_id' => $customer->id,
             'admin_id' => $request->user()->id,
@@ -131,7 +141,7 @@ class CustomerController extends Controller
 
         try {
             $telegramMessageId = $this->telegramService->sendMessage(
-                $customer->telegram_id,
+                $customer->telegram_private_chat_id,
                 $validated['message']
             );
             $delivery->update([
@@ -150,7 +160,7 @@ class CustomerController extends Controller
                 'status' => 'failed',
                 'error_message' => $exception->getMessage(),
             ]);
-            $customerMessage = $this->privateMessageFailure($exception);
+            [$errorCode, $customerMessage, $statusCode] = $this->privateMessageFailure($exception);
 
             Log::warning('Private Telegram customer message delivery failed.', [
                 'customer_id' => $customer->id,
@@ -162,9 +172,10 @@ class CustomerController extends Controller
             $response = response()->json([
                 'message' => 'Telegram could not deliver the private message.',
                 'delivered' => false,
+                'error_code' => $errorCode,
                 'error' => $customerMessage,
                 'data' => $this->presentMessage($delivery->fresh()),
-            ], $exception->telegramErrorCode === 429 ? 429 : 502);
+            ], $statusCode);
 
             if ($exception->telegramErrorCode === 429 && $exception->telegramRetryAfter !== null) {
                 $response->header('Retry-After', (string) $exception->telegramRetryAfter);
@@ -248,6 +259,10 @@ class CustomerController extends Controller
             'first_name' => $customer->first_name,
             'last_name' => $customer->last_name,
             'display_name' => $customer->name,
+            'private_chat_activated' => $customer->telegram_private_chat_id !== null
+                && $customer->telegram_private_chat_activated_at !== null,
+            'private_chat_activated_at' => $customer->telegram_private_chat_activated_at,
+            'telegram_last_seen_at' => $customer->telegram_last_seen_at,
             'is_active' => $customer->is_active,
         ];
     }
@@ -299,21 +314,64 @@ class CustomerController extends Controller
         ];
     }
 
-    private function privateMessageFailure(TelegramDeliveryException $exception): string
+    private function privateMessageFailure(TelegramDeliveryException $exception): array
     {
         $description = strtolower($exception->telegramDescription ?? '');
-        if ($exception->telegramErrorCode === 403
-            || str_contains($description, 'chat not found')
-            || str_contains($description, 'bot was blocked')) {
-            return 'The customer must open @ahseven_bot in a private chat and press Start before the bot can message them. Ask them to unblock the bot if they have blocked it.';
+        if (str_contains($description, 'bot was blocked')
+            || str_contains($description, 'blocked by the user')) {
+            return [
+                'BOT_BLOCKED_BY_CUSTOMER',
+                'The customer blocked @ahseven_bot. They must unblock the bot before Telegram can deliver private messages.',
+                403,
+            ];
+        }
+
+        if (str_contains($description, 'chat not found')) {
+            return [
+                'PRIVATE_CHAT_UNAVAILABLE',
+                'Telegram could not find the customer private chat. Ask them to open @ahseven_bot and press Start again.',
+                409,
+            ];
+        }
+
+        if ($exception->telegramErrorCode === 403) {
+            return [
+                'TELEGRAM_FORBIDDEN',
+                'Telegram refused the private message. The customer may need to open @ahseven_bot and press Start.',
+                403,
+            ];
         }
 
         if ($exception->telegramErrorCode === 429) {
-            return $exception->telegramRetryAfter === null
-                ? 'Telegram is rate limiting messages. Please wait before trying again.'
-                : "Telegram is rate limiting messages. Please retry in {$exception->telegramRetryAfter} seconds.";
+            return [
+                'TELEGRAM_RATE_LIMITED',
+                $exception->telegramRetryAfter === null
+                    ? 'Telegram is rate limiting messages. Please wait before trying again.'
+                    : "Telegram is rate limiting messages. Please retry in {$exception->telegramRetryAfter} seconds.",
+                429,
+            ];
         }
 
-        return $exception->getMessage();
+        if (str_contains(strtolower($exception->getMessage()), 'bot token is not configured')) {
+            return [
+                'TELEGRAM_NOT_CONFIGURED',
+                'Private Telegram messaging is temporarily unavailable because the bot is not configured.',
+                503,
+            ];
+        }
+
+        if ($exception->telegramErrorCode === null) {
+            return [
+                'TELEGRAM_NETWORK_ERROR',
+                'The Telegram API could not be reached. Please retry later.',
+                502,
+            ];
+        }
+
+        return [
+            'TELEGRAM_DELIVERY_FAILED',
+            $exception->getMessage(),
+            502,
+        ];
     }
 }

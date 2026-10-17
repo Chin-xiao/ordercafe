@@ -2,15 +2,15 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\User;
+use App\Services\TelegramCustomerIdentity;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 class VerifyTelegramInitData
 {
+    public function __construct(private TelegramCustomerIdentity $customerIdentity) {}
+
     public function handle(Request $request, Closure $next): Response
     {
         $initData = $request->header('X-Telegram-Init-Data') ?: $request->input('init_data');
@@ -44,38 +44,12 @@ class VerifyTelegramInitData
         }
         $request->attributes->set('telegram_web_app_start_param', $startParam);
 
-        $user = User::firstOrCreate(
-            ['telegram_id' => $userData['id']],
-            [
-                'name' => $userData['first_name'] ?? $userData['username'] ?? 'Telegram user',
-                'email' => 'telegram'.$userData['id'].'@users.invalid',
-                'password' => Hash::make(Str::random(64)),
-                'username' => $userData['username'] ?? null,
-                'first_name' => $userData['first_name'] ?? null,
-                'last_name' => $userData['last_name'] ?? null,
-                'role' => 'user',
-                'is_active' => true,
-            ]
-        );
+        $user = $this->customerIdentity->sync($userData);
 
         if (! $user->is_active) {
             return response()->json([
                 'message' => 'Forbidden: Your account has been disabled.',
             ], Response::HTTP_FORBIDDEN);
-        }
-
-        $profile = [
-            'name' => trim(implode(' ', array_filter([
-                $userData['first_name'] ?? null,
-                $userData['last_name'] ?? null,
-            ]))) ?: ($userData['username'] ?? $user->name),
-            'username' => $userData['username'] ?? null,
-            'first_name' => $userData['first_name'] ?? null,
-            'last_name' => $userData['last_name'] ?? null,
-        ];
-        $user->fill($profile);
-        if ($user->isDirty()) {
-            $user->save();
         }
 
         $request->setUserResolver(fn () => $user);

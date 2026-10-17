@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Category;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderSession;
@@ -9,6 +10,7 @@ use App\Models\Product;
 use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use App\Models\User;
+use App\Services\MiniAppCatalogCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Carbon;
@@ -28,8 +30,8 @@ class ApiBackendTest extends TestCase
     {
         parent::setUp();
 
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::CATEGORIES_KEY);
         Cache::store('file')->forget(
             'telegram:bot:details:'.substr(hash('sha256', 'test-bot-token'), 0, 16)
         );
@@ -146,10 +148,10 @@ class ApiBackendTest extends TestCase
     {
         $botToken = 'test-bot-token';
         config(['services.telegram.bot_token' => $botToken]);
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::CATEGORIES_KEY);
 
-        $category = \App\Models\Category::create([
+        $category = Category::create([
             'name' => 'Drink',
             'is_active' => true,
         ]);
@@ -199,7 +201,7 @@ class ApiBackendTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.price', '5.00');
         $this->assertCount(2, $catalogQueries);
-        $this->assertCount(0, $userUpdates);
+        $this->assertCount(1, $userUpdates);
 
         $this->patchJson("/api/admin/products/{$product->id}", [
             'price' => '6.00',
@@ -210,7 +212,7 @@ class ApiBackendTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.price', '6.00');
         $this->assertCount($queriesBeforeCacheRefresh + 2, $catalogQueries);
-        $this->assertCount(0, $userUpdates);
+        $this->assertCount(1, $userUpdates);
 
         $this->getJson('/api/mini-app/categories', ['X-Telegram-Init-Data' => $initData])
             ->assertOk()
@@ -222,8 +224,8 @@ class ApiBackendTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.name', 'Beverage');
 
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::PRODUCTS_KEY);
-        Cache::store('file')->forget(\App\Services\MiniAppCatalogCache::CATEGORIES_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::PRODUCTS_KEY);
+        Cache::store('file')->forget(MiniAppCatalogCache::CATEGORIES_KEY);
     }
 
     public function test_mini_app_rejects_expired_or_unsigned_init_data(): void
@@ -367,12 +369,12 @@ class ApiBackendTest extends TestCase
         $this->assertSame(0, $sessionUpdates);
         $this->assertDatabaseHas('order_sessions', [
             'id' => $expiredSession->id,
-                'status' => 'open',
+            'status' => 'open',
         ]);
         Artisan::call('order-sessions:expire');
         $this->assertDatabaseHas('order_sessions', [
-                'id' => $expiredSession->id,
-                'status' => 'expired',
+            'id' => $expiredSession->id,
+            'status' => 'expired',
         ]);
     }
 
