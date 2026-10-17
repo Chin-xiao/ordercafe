@@ -467,6 +467,89 @@ class CustomerManagementTest extends TestCase
             && str_contains($request['text'], 'open the Mini App'));
     }
 
+    public function test_webhook_diagnostics_are_admin_only_sanitized_and_read_only(): void
+    {
+        $botToken = '12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
+        $webhookSecret = 'configured-webhook-secret';
+        config([
+            'services.telegram.bot_token' => $botToken,
+            'services.telegram.webhook_secret' => $webhookSecret,
+        ]);
+        Http::fake([
+            'api.telegram.org/*/getWebhookInfo' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'url' => 'https://private.example/webhook/path',
+                    'pending_update_count' => 7,
+                    'last_error_date' => Carbon::parse('2026-10-17 10:00:00', 'UTC')->timestamp,
+                    'last_error_message' => 'Failure at https://private.example/webhook '.$botToken.' '.$webhookSecret.' CAFE_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456',
+                ],
+            ]),
+        ]);
+
+        $this->getJson('/api/admin/telegram-webhook-diagnostics')->assertUnauthorized();
+        $nonAdmin = User::factory()->create(['is_admin' => false, 'is_active' => true]);
+        $this->getJson('/api/admin/telegram-webhook-diagnostics', $this->headers($nonAdmin))->assertForbidden();
+        $this->app['auth']->forgetGuards();
+        $inactiveAdmin = User::factory()->create(['is_admin' => true, 'is_active' => false]);
+        $this->getJson('/api/admin/telegram-webhook-diagnostics', $this->headers($inactiveAdmin))->assertForbidden();
+        $this->app['auth']->forgetGuards();
+        Http::assertNothingSent();
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $headers = $this->headers($admin);
+        $usersBefore = User::count();
+        $tokensBefore = \Illuminate\Support\Facades\DB::table('personal_access_tokens')->count();
+        $groupsBefore = TelegramGroup::count();
+        $updatesBefore = \Illuminate\Support\Facades\DB::table('telegram_webhook_updates')->count();
+
+        $response = $this->get('/api/admin/telegram-webhook-diagnostics', $headers)
+            ->assertOk()
+            ->assertExactJson([
+                'webhook_url_configured' => true,
+                'pending_update_count' => 7,
+                'last_error_date' => '2026-10-17T10:00:00+00:00',
+                'last_error_message' => 'Failure at [URL REDACTED] [REDACTED] [REDACTED] [REDACTED]',
+            ]);
+
+        $responseBody = $response->getContent();
+        $this->assertStringContainsString(
+            'no-store',
+            strtolower((string) $response->headers->get('Cache-Control'))
+        );
+        $this->assertStringNotContainsString($botToken, $responseBody);
+        $this->assertStringNotContainsString($webhookSecret, $responseBody);
+        $this->assertStringNotContainsString('private.example', $responseBody);
+        $this->assertSame($usersBefore, User::count());
+        $this->assertSame($tokensBefore, \Illuminate\Support\Facades\DB::table('personal_access_tokens')->count());
+        $this->assertSame($groupsBefore, TelegramGroup::count());
+        $this->assertSame($updatesBefore, \Illuminate\Support\Facades\DB::table('telegram_webhook_updates')->count());
+
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/getWebhookInfo'));
+    }
+
+    public function test_webhook_diagnostics_reject_input_and_hide_telegram_api_failures(): void
+    {
+        config(['services.telegram.bot_token' => 'test-diagnostics-bot-token']);
+        Http::fake([
+            'api.telegram.org/*/getWebhookInfo' => Http::response([
+                'ok' => false,
+                'description' => 'Sensitive upstream details',
+            ], 500),
+        ]);
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $headers = $this->headers($admin);
+
+        $this->get('/api/admin/telegram-webhook-diagnostics?url=https://example.com', $headers)
+            ->assertBadRequest()
+            ->assertContent('');
+        Http::assertNothingSent();
+
+        $this->get('/api/admin/telegram-webhook-diagnostics', $headers)
+            ->assertStatus(502)
+            ->assertContent('');
+    }
+
     public function test_admin_can_create_multiple_group_tokens_without_unlinking_verified_groups(): void
     {
         config([

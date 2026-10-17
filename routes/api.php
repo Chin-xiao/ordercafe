@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\OrderSessionController;
 use App\Http\Controllers\Admin\ProductController as AdminProductController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\TelegramSettingsController;
+use App\Http\Controllers\Admin\TelegramWebhookDiagnosticsController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
@@ -75,6 +76,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Telegram Settings (Managed by logged-in admins)
     Route::get('/telegram-settings', [TelegramSettingsController::class, 'show']);
     Route::post('/telegram-settings/regenerate', [TelegramSettingsController::class, 'regenerate']);
+    Route::get('/telegram-webhook-diagnostics', [TelegramWebhookDiagnosticsController::class, 'show'])
+        ->middleware('throttle:10,1');
 
     // Dashboard & Reports (Matching frontend paths explicitly)
     Route::get('/dashboard', [ReportController::class, 'dashboard']);

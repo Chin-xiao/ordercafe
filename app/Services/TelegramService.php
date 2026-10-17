@@ -241,6 +241,66 @@ class TelegramService
         return (int) $telegramMessageId;
     }
 
+    public function getWebhookDiagnostics(): array
+    {
+        if (! $this->botToken) {
+            throw new TelegramWebhookDiagnosticsException();
+        }
+
+        try {
+            $response = Http::connectTimeout(5)
+                ->timeout(10)
+                ->get("{$this->apiUrl}/getWebhookInfo");
+        } catch (ConnectionException) {
+            throw new TelegramWebhookDiagnosticsException();
+        }
+
+        $result = $response->json('result');
+        $pendingUpdateCount = is_array($result) ? ($result['pending_update_count'] ?? null) : null;
+        $lastErrorDate = is_array($result) ? ($result['last_error_date'] ?? null) : null;
+        $lastErrorMessage = is_array($result) ? ($result['last_error_message'] ?? null) : null;
+
+        if ($response->failed()
+            || $response->json('ok') !== true
+            || ! is_array($result)
+            || ! is_int($pendingUpdateCount)
+            || $pendingUpdateCount < 0
+            || ($lastErrorDate !== null && (! is_int($lastErrorDate) || $lastErrorDate < 0))
+            || ($lastErrorMessage !== null && ! is_string($lastErrorMessage))) {
+            throw new TelegramWebhookDiagnosticsException();
+        }
+
+        return [
+            'webhook_url_configured' => is_string($result['url'] ?? null) && trim($result['url']) !== '',
+            'pending_update_count' => $pendingUpdateCount,
+            'last_error_date' => $lastErrorDate === null
+                ? null
+                : Carbon::createFromTimestampUTC($lastErrorDate)->toIso8601String(),
+            'last_error_message' => is_string($lastErrorMessage)
+                ? $this->sanitizeWebhookDiagnosticMessage($lastErrorMessage)
+                : null,
+        ];
+    }
+
+    private function sanitizeWebhookDiagnosticMessage(string $message): ?string
+    {
+        $sensitiveValues = array_filter([
+            $this->botToken,
+            config('services.telegram.webhook_secret'),
+        ], fn ($value) => is_string($value) && $value !== '');
+
+        $message = str_replace($sensitiveValues, '[REDACTED]', $message);
+        $message = preg_replace('~https?://\S+~i', '[URL REDACTED]', $message) ?? '[REDACTED]';
+        $message = preg_replace(
+            '/\b(?:\d{8,}:[A-Za-z0-9_-]{20,}|CAFE_[A-Z0-9]{32})\b/',
+            '[REDACTED]',
+            $message
+        ) ?? '[REDACTED]';
+        $message = substr($message, 0, 1000);
+
+        return trim($message) === '' ? null : $message;
+    }
+
     private function verifiedGroups(?OrderSession $session = null)
     {
         if (! $this->botToken) {
