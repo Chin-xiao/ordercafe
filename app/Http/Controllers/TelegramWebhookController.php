@@ -271,10 +271,16 @@ class TelegramWebhookController extends Controller
             $group->save();
         });
 
-        $this->telegramService->sendMessage(
-            (int) $chat['id'],
-            'Group successfully verified and linked to the Cafe Ordering system.'
-        );
+        // Wrap the outgoing Telegram API call in try/catch so a network glitch
+        // doesn't rollback your database group verification!
+        try {
+            $this->telegramService->sendMessage(
+                (int) $chat['id'],
+                'Group successfully verified and linked to the Cafe Ordering system.'
+            );
+        } catch (\Throwable $e) {
+            Log::error('Failed to send Telegram group verification message: ' . $e->getMessage());
+        }
     }
 
     private function markUpdateFailed(int $updateId): void
