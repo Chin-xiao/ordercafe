@@ -217,8 +217,8 @@ class TelegramWebhookController extends Controller
             return;
         }
 
-        $text = trim($message['text']);
-        if (! preg_match('/^\\/setup(?:@([A-Za-z0-9_]+))?(?:\\s+([A-Za-z0-9_-]+))?\\s*$/D', $text, $matches)) {
+       $text = trim($message['text']);
+        if (! preg_match('/^\\/setup(?:@([A-Za-z0-9_]+))?(?:\\s+([A-Za-z0-9_-]+))?\\s*$/Du', $text, $matches)) {
             return;
         }
 
