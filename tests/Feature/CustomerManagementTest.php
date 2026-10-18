@@ -583,6 +583,9 @@ class CustomerManagementTest extends TestCase
             ->assertJsonPath('data.is_verified', false)
             ->json('data.verify_token');
         $this->assertNotSame('EXISTING-GROUP-TOKEN', $initialToken);
+        $this->getJson('/api/admin/telegram-settings', $headers)
+            ->assertOk()
+            ->assertJsonPath('data.setup_command', '/setup@ahseven_bot '.$initialToken);
         $this->assertDatabaseHas('telegram_groups', [
             'id' => $existing->id,
             'telegram_chat_id' => -100123456789,
@@ -596,6 +599,10 @@ class CustomerManagementTest extends TestCase
             ->assertJsonPath('data.chat_id', null)
             ->assertJsonPath('data.is_verified', false)
             ->json('data.verify_token');
+        $this->assertSame(
+            '/setup@ahseven_bot '.$secondToken,
+            $this->getJson('/api/admin/telegram-settings', $headers)->json('data.setup_command')
+        );
 
         $webhookHeaders = ['X-Telegram-Bot-Api-Secret-Token' => 'configured-webhook-secret'];
         $this->postJson('/api/telegram/webhook', [
@@ -609,7 +616,7 @@ class CustomerManagementTest extends TestCase
         $this->postJson('/api/telegram/webhook', [
             'update_id' => 93002,
             'message' => [
-                'text' => '/setup '.$secondToken,
+                'text' => '/setup@ahseven_bot '.$secondToken,
                 'chat' => ['id' => -100200000002, 'type' => 'group', 'title' => 'New Group Two'],
                 'from' => ['id' => 123456789],
             ],

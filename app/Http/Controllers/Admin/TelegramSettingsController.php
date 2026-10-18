@@ -25,7 +25,7 @@ class TelegramSettingsController extends Controller
             'success' => true,
             'data' => [
                 'verify_token' => $group->verify_token,
-                'setup_command' => '/setup '.$group->verify_token,
+                'setup_command' => $this->setupCommand($group),
                 'is_verified' => $group->is_verified,
                 'group_name' => $group->group_name ?: $group->title,
                 'chat_id' => $group->telegram_chat_id,
@@ -42,7 +42,7 @@ class TelegramSettingsController extends Controller
             'message' => 'New verification token generated.',
             'data' => [
                 'verify_token' => $group->verify_token,
-                'setup_command' => '/setup '.$group->verify_token,
+                'setup_command' => $this->setupCommand($group),
                 'is_verified' => $group->is_verified,
                 'group_name' => $group->group_name,
                 'chat_id' => $group->telegram_chat_id,
@@ -57,5 +57,12 @@ class TelegramSettingsController extends Controller
             'is_verified' => false,
             'is_active' => true,
         ]);
+    }
+
+    private function setupCommand(TelegramGroup $group): string
+    {
+        $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
+
+        return "/setup@{$botUsername} {$group->verify_token}";
     }
 }
