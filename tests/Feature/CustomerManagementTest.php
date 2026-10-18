@@ -351,7 +351,8 @@ class CustomerManagementTest extends TestCase
             'message' => 'Your drink is ready.',
         ], $adminHeaders + ['Idempotency-Key' => 'drink-ready-before-start'])->assertStatus(409)
             ->assertJsonPath('delivered', false)
-            ->assertJsonPath('error_code', 'PRIVATE_CHAT_NOT_STARTED');
+            ->assertJsonPath('error_code', 'PRIVATE_CHAT_NOT_STARTED')
+            ->assertJsonPath('activation_url', 'https://t.me/ahseven_bot?start=order_notifications');
         Http::assertNothingSent();
 
         $webhookHeaders = ['X-Telegram-Bot-Api-Secret-Token' => $webhookSecret];

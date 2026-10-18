@@ -153,10 +153,13 @@ class CustomerController extends Controller
 
         if ($customer->telegram_private_chat_id === null
             || $customer->telegram_private_chat_activated_at === null) {
+            $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
+
             return response()->json([
-                'message' => 'The customer must open @ahseven_bot in a private chat and press Start before private messages can be delivered.',
+                'message' => "The customer must open @{$botUsername} in a private chat and press Start before private messages can be delivered.",
                 'delivered' => false,
                 'error_code' => 'PRIVATE_CHAT_NOT_STARTED',
+                'activation_url' => "https://t.me/{$botUsername}?start=order_notifications",
             ], 409);
         }
 
