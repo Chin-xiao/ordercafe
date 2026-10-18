@@ -10,26 +10,21 @@ class TelegramSettingsController extends Controller
 {
     public function show()
     {
-        $group = TelegramGroup::query()
+        $linkedGroup = $this->linkedGroup();
+        $pendingGroup = TelegramGroup::query()
             ->where('is_verified', false)
             ->whereNull('telegram_chat_id')
             ->whereNotNull('verify_token')
             ->latest('id')
             ->first();
 
-        if (! $group) {
-            $group = $this->createPendingGroup();
+        if (! $pendingGroup && ! $linkedGroup) {
+            $pendingGroup = $this->createPendingGroup();
         }
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'verify_token' => $group->verify_token,
-                'setup_command' => $this->setupCommand($group),
-                'is_verified' => $group->is_verified,
-                'group_name' => $group->group_name ?: $group->title,
-                'chat_id' => $group->telegram_chat_id,
-            ],
+            'data' => $this->settingsData($linkedGroup, $pendingGroup),
         ]);
     }
 
@@ -40,14 +35,38 @@ class TelegramSettingsController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'New verification token generated.',
-            'data' => [
-                'verify_token' => $group->verify_token,
-                'setup_command' => $this->setupCommand($group),
-                'is_verified' => $group->is_verified,
-                'group_name' => $group->group_name,
-                'chat_id' => $group->telegram_chat_id,
-            ],
+            'data' => $this->settingsData($this->linkedGroup(), $group),
         ]);
+    }
+
+    private function linkedGroup(): ?TelegramGroup
+    {
+        return TelegramGroup::query()
+            ->where('is_active', true)
+            ->where('is_verified', true)
+            ->whereNotNull('telegram_chat_id')
+            ->latest('id')
+            ->first();
+    }
+
+    private function settingsData(?TelegramGroup $linkedGroup, ?TelegramGroup $pendingGroup): array
+    {
+        return [
+            'verify_token' => $pendingGroup?->verify_token,
+            'setup_command' => $pendingGroup ? $this->setupCommand($pendingGroup) : null,
+            'is_verified' => $linkedGroup !== null,
+            'group_name' => $linkedGroup?->group_name ?: $linkedGroup?->title,
+            'chat_id' => $linkedGroup?->telegram_chat_id,
+            'linked_group' => $linkedGroup ? [
+                'id' => $linkedGroup->id,
+                'group_name' => $linkedGroup->group_name ?: $linkedGroup->title,
+                'chat_id' => $linkedGroup->telegram_chat_id,
+            ] : null,
+            'pending_setup' => $pendingGroup ? [
+                'verify_token' => $pendingGroup->verify_token,
+                'setup_command' => $this->setupCommand($pendingGroup),
+            ] : null,
+        ];
     }
 
     private function createPendingGroup(): TelegramGroup

@@ -650,6 +650,26 @@ class CustomerManagementTest extends TestCase
             'group_name' => 'New Group Two',
             'is_verified' => true,
         ]);
+        $settings = $this->getJson('/api/admin/telegram-settings', $headers)
+            ->assertOk()
+            ->assertJsonPath('data.is_verified', true)
+            ->assertJsonPath('data.group_name', 'New Group Two')
+            ->assertJsonPath('data.chat_id', -100200000002)
+            ->assertJsonPath('data.linked_group.group_name', 'New Group Two')
+            ->assertJsonPath('data.verify_token', null)
+            ->assertJsonPath('data.pending_setup', null);
+        $this->assertDatabaseCount('telegram_groups', 3);
+
+        $newPending = $this->postJson('/api/admin/telegram-settings/regenerate', [], $headers)
+            ->assertOk()
+            ->assertJsonPath('data.is_verified', true)
+            ->assertJsonPath('data.group_name', 'New Group Two')
+            ->assertJsonPath('data.chat_id', -100200000002)
+            ->json('data.verify_token');
+        $this->assertSame(
+            '/setup@ahseven_bot '.$newPending,
+            $this->getJson('/api/admin/telegram-settings', $headers)->json('data.setup_command')
+        );
 
         $this->postJson('/api/telegram/webhook', [
             'update_id' => 93003,
@@ -668,7 +688,7 @@ class CustomerManagementTest extends TestCase
             ],
         ], $webhookHeaders)->assertOk();
         Http::assertSent(fn ($request) => $request['chat_id'] === -100200000002);
-        $this->assertDatabaseCount('telegram_groups', 3);
+        $this->assertDatabaseCount('telegram_groups', 4);
         Http::assertSent(fn ($request) => $request['chat_id'] === -100200000003
             && str_contains($request['text'], 'Invalid or expired group verification token'));
         Http::assertSent(fn ($request) => $request['chat_id'] === -100200000003

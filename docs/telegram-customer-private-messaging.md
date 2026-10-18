@@ -30,6 +30,8 @@ The webhook update ID is stored uniquely. Duplicate updates return HTTP 200 with
 
 `telegram_groups` already permits multiple group rows. Admin `POST /api/admin/telegram-settings/regenerate` now creates a new pending token instead of clearing the currently verified group. Each token can verify one group; repeating the command in that same group is safe, while reusing it in another group is rejected. Paste the admin-provided `/setup@ahseven_bot TOKEN` command in the group or supergroup; the bot-addressed form allows Telegram to deliver it when group privacy mode is enabled.
 
+The Admin Telegram settings endpoint reports the newest active verified group separately from the pending setup command, so the connected group name and chat ID remain visible while preparing another group token.
+
 Group notifications use the newest active, verified Telegram group. Starting or closing an order session sends its existing announcement or summary to that group; each submitted customer order also sends a concise order notice there. Telegram notification delivery failures are logged without undoing a successfully submitted order.
 
 The webhook secret check was added to the latest backend changes. If Telegram's existing webhook was not configured with the matching `secret_token`, Telegram requests receive `401` and group commands are never processed. A missing `TELEGRAM_WEBHOOK_SECRET` on the server returns `503`. Keep this check enabled and update the existing webhook's secret configuration; do not delete pending updates or reset the webhook.
