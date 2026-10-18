@@ -8,11 +8,15 @@ use App\Models\Product;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrderService
 {
-    public function __construct(private OrderSessionService $orderSessionService) {}
+    public function __construct(
+        private OrderSessionService $orderSessionService,
+        private TelegramService $telegramService
+    ) {}
 
     /**
      * Submit an order for a user within an active order session.
@@ -144,6 +148,16 @@ class OrderService
 
             throw ValidationException::withMessages([
                 'order_session_id' => ['The time window for this order session has expired.'],
+            ]);
+        }
+
+        try {
+            $this->telegramService->sendOrderPlacedNotification($order);
+        } catch (TelegramDeliveryException $exception) {
+            Log::warning('Submitted order Telegram notification could not be prepared.', [
+                'order_id' => $order->id,
+                'order_session_id' => $order->order_session_id,
+                'error' => $exception->getMessage(),
             ]);
         }
 

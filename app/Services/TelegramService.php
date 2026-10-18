@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Order;
 use App\Models\OrderSession;
 use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
@@ -169,6 +170,21 @@ class TelegramService
         return $results;
     }
 
+    public function sendOrderPlacedNotification(Order $order): array
+    {
+        $order->loadMissing(['items', 'session', 'user']);
+        $groups = $this->verifiedGroups($order->session);
+
+        return $this->sendToGroups(
+            $groups,
+            $order->session,
+            'order_placed_'.$order->id,
+            $this->orderPlacedMessage($order),
+            null,
+            'HTML'
+        );
+    }
+
     public function sendMessage(
         int|string $chatId,
         string $text,
@@ -314,6 +330,8 @@ class TelegramService
             ->where('is_active', true)
             ->where('is_verified', true)
             ->whereNotNull('telegram_chat_id')
+            ->orderByDesc('id')
+            ->limit(1)
             ->get();
 
         if ($groups->isEmpty()) {
@@ -475,6 +493,35 @@ class TelegramService
     private function orderStartedMessage(OrderSession $session): string
     {
         return "តោះមេៗអាច Order Drink អីឡូវ​បាន\n\nPlease Click <b>Order Now</b>";
+    }
+
+    private function orderPlacedMessage(Order $order): string
+    {
+        $customerName = htmlspecialchars(
+            $order->user?->name ?? 'Telegram customer',
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
+        $lines = [
+            '<b>New order '.$this->escapeTelegramText($order->order_number).'</b>',
+            'Customer: '.$customerName,
+            'Items:',
+        ];
+
+        foreach ($order->items as $item) {
+            $itemName = $this->escapeTelegramText($item->product_name);
+            $sugar = $item->sugar_percent === null ? '' : " ({$item->sugar_percent}% sugar)";
+            $lines[] = "- {$itemName} x{$item->quantity}{$sugar}";
+        }
+
+        $lines[] = '<b>Total: '.$this->formatCurrency($order->total_amount).'៛</b>';
+
+        return implode("\n", $lines);
+    }
+
+    private function escapeTelegramText(string $text): string
+    {
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function sendToGroups(

@@ -11,6 +11,7 @@ use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use App\Models\User;
 use App\Services\MiniAppCatalogCache;
+use App\Services\TelegramService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Carbon;
@@ -150,6 +151,93 @@ class ApiBackendTest extends TestCase
             'email' => 'telegram123456789@users.invalid',
         ]);
         $this->assertArrayNotHasKey('password', $order->user->toArray());
+    }
+
+    public function test_order_submission_notifies_only_the_newest_active_verified_group_once(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 901],
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-ORDER-NOTIFY',
+            'title' => 'Order Notification',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $product = Product::create([
+            'name' => 'Iced Latte',
+            'price' => '4.50',
+            'is_available' => true,
+        ]);
+        $olderGroup = TelegramGroup::create([
+            'telegram_chat_id' => -100123456780,
+            'title' => 'Older Active Group',
+            'verify_token' => 'OLDER-GROUP-TOKEN',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $targetGroup = TelegramGroup::create([
+            'telegram_chat_id' => -100123456781,
+            'title' => 'Newest Active Group',
+            'verify_token' => 'NEWER-GROUP-TOKEN',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456782,
+            'title' => 'Newest Inactive Group',
+            'verify_token' => 'INACTIVE-GROUP-TOKEN',
+            'is_verified' => true,
+            'is_active' => false,
+        ]);
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'user' => json_encode([
+                'id' => 723456789,
+                'first_name' => 'Order',
+                'last_name' => 'Customer',
+            ], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $session->id,
+            'items' => [['product_id' => $product->id, 'quantity' => 2, 'sugar_percent' => 50]],
+        ], ['X-Telegram-Init-Data' => $initData])
+            ->assertCreated()
+            ->assertJsonPath('data.total_amount', '9.00');
+
+        $order = Order::query()->where('order_session_id', $session->id)->firstOrFail();
+        $this->assertDatabaseHas('telegram_messages', [
+            'telegram_group_id' => $targetGroup->id,
+            'order_session_id' => $session->id,
+            'message_type' => 'order_placed_'.$order->id,
+            'telegram_chat_id' => -100123456781,
+            'status' => 'sent',
+        ]);
+        $this->assertDatabaseMissing('telegram_messages', [
+            'telegram_group_id' => $olderGroup->id,
+            'message_type' => 'order_placed_'.$order->id,
+        ]);
+        Http::assertSentCount(1);
+        Http::assertSent(fn (HttpRequest $request) => (
+            str_ends_with($request->url(), '/sendMessage')
+            && $request['chat_id'] === -100123456781
+            && str_contains($request['text'], '<b>New order '.$order->order_number.'</b>')
+            && str_contains($request['text'], 'Iced Latte x2 (50% sugar)')
+            && str_contains($request['text'], '<b>Total: 9៛</b>')
+        ));
+
+        app(TelegramService::class)->sendOrderPlacedNotification($order);
+        Http::assertSentCount(1);
     }
 
     public function test_catalog_cache_avoids_repeat_catalog_queries_and_admin_edits_invalidate_it(): void
@@ -658,6 +746,14 @@ class ApiBackendTest extends TestCase
             'is_verified' => true,
             'is_active' => true,
         ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456790,
+            'title' => 'Newest Cafe Group',
+            'group_name' => 'Newest Cafe Group',
+            'verify_token' => 'CAFE-TEST-TOKEN-NEWEST',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
         $headers = [
             'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
         ];
@@ -680,7 +776,7 @@ class ApiBackendTest extends TestCase
 
         Http::assertSentCount(3);
         Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
-            && $request['chat_id'] === -100123456789
+            && $request['chat_id'] === -100123456790
             && $request['text'] === "តោះមេៗអាច Order Drink អីឡូវ​បាន\n\nPlease Click <b>Order Now</b>"
             && $request['parse_mode'] === 'HTML'
             && ($request['reply_markup']['inline_keyboard'][0][0] ?? null) === [
@@ -688,13 +784,13 @@ class ApiBackendTest extends TestCase
                 'url' => "https://t.me/ordercafe_bot/order?startapp=order_{$session->id}",
             ]);
         Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
-            && $request['chat_id'] === -100123456789
+            && $request['chat_id'] === -100123456790
             && str_contains($request['text'], 'Iced Coffee x5 Unit price: 2.5៛; Line total: 12.5៛')
             && str_contains($request['text'], '<b>Total Price: 12.5៛</b>')
             && str_contains($request['text'], 'Status: closed'));
         $this->assertDatabaseHas('telegram_messages', [
             'order_session_id' => $session->id,
-            'telegram_chat_id' => -100123456789,
+            'telegram_chat_id' => -100123456790,
             'telegram_message_id' => 987,
             'status' => 'sent',
         ]);
