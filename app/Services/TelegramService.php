@@ -141,12 +141,12 @@ class TelegramService
                 $productName = htmlspecialchars($item['product_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                 $sugar = $item['sugar_percent'] === null ? '' : " {$item['sugar_percent']}%";
                 $quantity = (int) $item['total_quantity'];
-                $unitPrice = $this->formatCurrency($item['unit_price']);
+                //$unitPrice = $this->formatCurrency($item['unit_price']);
                 $lineTotal = $this->formatCurrency($item['subtotal']);
                 $description = "- {$productName}{$sugar} x{$quantity}";
 
                 if ($quantity > 1) {
-                    $description .= " Unit price: {$unitPrice}៛; Line total: {$lineTotal}៛";
+                    $description .= "total: {$lineTotal}៛";
                 } else {
                     $description .= " Price: {$lineTotal}៛";
                 }
