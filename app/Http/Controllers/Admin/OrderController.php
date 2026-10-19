@@ -8,6 +8,7 @@ use App\Models\OrderItem;
 use App\Models\OrderSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
@@ -31,6 +32,15 @@ class OrderController extends Controller
 
         return response()->json(['data' => $this->presentOrder($order)]);
     }
+    public function updateStatus(Request $request, Order $order)
+{
+    $order->update([
+        'status' => $request->status,
+        'user_id' => Auth::id(), // 👈 Automatically captures the logged-in controller's ID
+    ]);
+
+    return response()->json(['data' => $order]);
+}
 
     private function orders(Request $request)
     {

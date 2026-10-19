@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\ProductController as AdminProductController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\TelegramSettingsController;
 use App\Http\Controllers\Admin\TelegramWebhookDiagnosticsController;
+use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
@@ -87,4 +88,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);
+
+
+    //super admin routes
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/users', [UserController::class, 'store']);
+    Route::delete('/users/{user}', [UserController::class, 'destroy']);
 });
