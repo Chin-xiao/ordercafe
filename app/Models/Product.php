@@ -26,12 +26,15 @@ class Product extends Model
         'image_public_id',
         'is_available',
         'sort_order',
+        'requires_sugar',
     ];
 
     protected $casts = [
         'price' => 'decimal:2',
         'is_available' => 'boolean',
-    ];
+        'requires_sugar' => 'boolean', // 👈 This ensures true/false is handled correctly
+];
+
 
     public function category()
     {

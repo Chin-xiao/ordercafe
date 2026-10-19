@@ -56,13 +56,15 @@ class ProductController extends Controller
             'image_url' => ['nullable', 'url', 'max:2048'],
             'is_available' => ['boolean'],
             'sort_order' => ['integer'],
+            'requires_sugar' => ['boolean'], // 👈 1. Add this here
         ];
 
         if (!$partial) {
             $rules['name'][] = 'required';
             $rules['price'][] = 'required';
         } else {
-            foreach (['name', 'price', 'category_id', 'description', 'image_url', 'is_available', 'sort_order'] as $field) {
+            // 👈 2. Make sure 'requires_sugar' is included in this array list
+            foreach (['name', 'price', 'category_id', 'description', 'image_url', 'is_available', 'sort_order', 'requires_sugar'] as $field) {
                 $rules[$field][] = 'sometimes';
             }
         }
