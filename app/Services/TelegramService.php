@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class TelegramService
 {
@@ -182,6 +183,18 @@ class TelegramService
             $this->orderPlacedMessage($order),
             null,
             'HTML'
+        );
+    }
+
+    public function sendAdminMessage(OrderSession $session, string $text): array
+    {
+        $groups = $this->verifiedGroups($session);
+
+        return $this->sendToGroups(
+            $groups,
+            $session,
+            'admin_message_'.Str::uuid(),
+            $text
         );
     }
 

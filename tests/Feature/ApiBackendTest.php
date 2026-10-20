@@ -797,6 +797,102 @@ class ApiBackendTest extends TestCase
         $this->assertSame(2, TelegramMessage::where('order_session_id', $session->id)->count());
     }
 
+    public function test_admin_can_send_a_message_to_the_verified_group_from_an_order_session(): void
+    {
+        config(['services.telegram.bot_token' => 'test-bot-token']);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 321],
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-MESSAGE',
+            'title' => 'Dinner',
+            'expires_at' => now()->addHour(),
+            'status' => 'open',
+            'created_by' => $admin->id,
+        ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456790,
+            'title' => 'Cafe Group',
+            'group_name' => 'Cafe Group',
+            'verify_token' => 'CAFE-TEST-TOKEN',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+
+        $this->postJson("/api/admin/order-sessions/{$session->id}/messages", [
+            'message' => 'The cafe will close early today.',
+        ], $headers)
+            ->assertOk()
+            ->assertJsonPath('delivered', true)
+            ->assertJsonPath('telegram_notifications.0.status', 'sent');
+
+        Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/sendMessage')
+            && $request['chat_id'] === -100123456790
+            && $request['text'] === 'The cafe will close early today.'
+            && ! isset($request['parse_mode']));
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'telegram_chat_id' => -100123456790,
+            'telegram_message_id' => 321,
+            'status' => 'sent',
+        ]);
+    }
+
+    public function test_admin_group_message_requires_non_empty_text_and_reports_telegram_failure(): void
+    {
+        config(['services.telegram.bot_token' => 'test-bot-token']);
+        Http::fake([
+            'api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => false,
+                'error_code' => 400,
+                'description' => 'Bad Request: chat not found',
+            ], 400),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'order_number' => 'SESSION-TEST-MESSAGE-FAIL',
+            'title' => 'Dinner',
+            'expires_at' => now()->addHour(),
+            'status' => 'open',
+            'created_by' => $admin->id,
+        ]);
+        TelegramGroup::create([
+            'telegram_chat_id' => -100123456790,
+            'title' => 'Cafe Group',
+            'group_name' => 'Cafe Group',
+            'verify_token' => 'CAFE-TEST-TOKEN',
+            'is_verified' => true,
+            'is_active' => true,
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+        ];
+        $url = "/api/admin/order-sessions/{$session->id}/messages";
+
+        $this->postJson($url, ['message' => " \n "], $headers)->assertUnprocessable();
+        Http::assertNothingSent();
+
+        $this->postJson($url, ['message' => 'Please check the cafe group.'], $headers)
+            ->assertStatus(502)
+            ->assertJsonPath('delivered', false)
+            ->assertJsonPath('telegram_notifications.0.status', 'failed');
+
+        $this->assertDatabaseHas('telegram_messages', [
+            'order_session_id' => $session->id,
+            'telegram_chat_id' => -100123456790,
+            'status' => 'failed',
+        ]);
+    }
+
     public function test_starting_a_session_does_not_post_a_main_app_link_when_bot_has_no_main_mini_app(): void
     {
         config([

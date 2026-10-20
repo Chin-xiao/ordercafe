@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\OrderSession;
 use App\Services\OrderSessionService;
 use App\Services\TelegramDeliveryException;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
@@ -14,8 +15,10 @@ class OrderSessionController extends Controller
 {
     protected OrderSessionService $sessionService;
 
-    public function __construct(OrderSessionService $sessionService)
-    {
+    public function __construct(
+        OrderSessionService $sessionService,
+        protected TelegramService $telegramService
+    ) {
         $this->sessionService = $sessionService;
     }
 
@@ -95,6 +98,39 @@ class OrderSessionController extends Controller
         return response()->json([
             'data' => $this->sessionService->sessionSummary($orderSession),
         ]);
+    }
+
+    public function sendMessage(Request $request, OrderSession $orderSession)
+    {
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:4096', 'not_regex:/^\s*$/u'],
+        ]);
+
+        try {
+            $notifications = $this->telegramService->sendAdminMessage(
+                $orderSession,
+                $validated['message']
+            );
+        } catch (TelegramDeliveryException $exception) {
+            return response()->json([
+                'message' => 'The Telegram group message could not be delivered.',
+                'delivered' => false,
+                'error' => $exception->getMessage(),
+                'telegram_notifications' => $exception->sessionData['notifications'] ?? [],
+            ], 502);
+        }
+
+        $failed = collect($notifications)->contains(
+            fn (array $notification) => $notification['status'] !== 'sent'
+        );
+
+        return response()->json([
+            'message' => $failed
+                ? 'The Telegram group message could not be delivered.'
+                : 'The Telegram group message was sent.',
+            'delivered' => ! $failed,
+            'telegram_notifications' => $notifications,
+        ], $failed ? 502 : 200);
     }
 
     public function start(OrderSession $orderSession)

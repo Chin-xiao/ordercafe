@@ -106,6 +106,18 @@ Manual close and scheduled expiration produce an HTML-formatted summary containi
 
 The existing `order-sessions:expire` command now sends the summary when it atomically changes an open session to expired. Ensure the Render scheduler invokes `php artisan schedule:run` every minute (or keep the existing scheduler worker running); no additional queue or bot is introduced.
 
+Admins can send a plain-text message to the newest active, verified Telegram group from an order-session section:
+
+```http
+POST /api/admin/order-sessions/{orderSession}/messages
+Authorization: ****** Sanctum token>
+Content-Type: application/json
+
+{"message":"The cafe will close early today."}
+```
+
+The endpoint is restricted to authenticated admins, accepts non-empty messages up to Telegram's 4096-character limit, and records the delivery in `telegram_messages`. A successful response returns `delivered: true`; missing Telegram configuration or a Telegram delivery failure returns a non-success response and does not report the message as sent.
+
 ## Render/PostgreSQL deployment
 
 1. Deploy the code and run `php artisan migrate --force` against the existing Render PostgreSQL database. The migration adds a nullable sugar snapshot and a nullable unique Telegram delivery key; existing orders retain `NULL` sugar.
