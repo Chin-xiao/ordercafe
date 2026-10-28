@@ -6,15 +6,16 @@ use App\Models\Category;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderSession;
+use App\Models\PaymentSetting;
 use App\Models\Product;
 use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use App\Models\User;
 use App\Services\MiniAppCatalogCache;
 use App\Services\TelegramService;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -22,7 +23,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class ApiBackendTest extends TestCase
@@ -96,8 +97,6 @@ class ApiBackendTest extends TestCase
 
     public function test_super_admin_can_upload_a_payment_qr_for_an_admin_account(): void
     {
-        Storage::fake('public');
-
         $superAdmin = User::factory()->create([
             'is_admin' => true,
             'role' => 'superadmin',
@@ -110,28 +109,23 @@ class ApiBackendTest extends TestCase
             'Authorization' => 'Bearer '.$superAdmin->createToken('test-super-admin')->plainTextToken,
             'Accept' => 'application/json',
         ];
-        $image = UploadedFile::fake()->createWithContent(
-            'payment-qr.png',
-            base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJkAAAAASUVORK5CYII=')
-        );
+        $qrUrl = 'https://res.cloudinary.com/ordercafe/image/upload/payment-qr.png';
 
-        $response = $this->post('/api/admin/users/'.$account->id.'/payment-qr', [
-            'image' => $image,
+        $this->postJson('/api/admin/users/'.$account->id.'/payment-qr', [
+            'payment_qr_url' => $qrUrl,
         ], $headers)->assertOk()
-            ->assertJsonPath('data.user_id', $account->id);
+            ->assertJsonPath('data.user_id', $account->id)
+            ->assertJsonPath('data.payment_qr_image_url', $qrUrl);
 
-        $account->refresh();
-        $this->assertNotNull($account->payment_qr_path);
-        Storage::disk('public')->assertExists($account->payment_qr_path);
-        $this->assertSame(
-            Storage::disk('public')->url($account->payment_qr_path),
-            $response->json('data.payment_qr_image_url')
-        );
+        $this->assertDatabaseHas('payment_settings', [
+            'user_id' => $account->id,
+            'qr_image_url' => $qrUrl,
+        ]);
 
         $this->getJson('/api/admin/users', $headers)
             ->assertOk()
             ->assertJsonFragment([
-                'payment_qr_image_url' => $response->json('data.payment_qr_image_url'),
+                'payment_qr_image_url' => $qrUrl,
             ]);
     }
 
@@ -147,14 +141,115 @@ class ApiBackendTest extends TestCase
             'Accept' => 'application/json',
         ];
 
-        $this->post('/api/admin/users/'.$account->id.'/payment-qr', [
-            'image' => UploadedFile::fake()->createWithContent(
-                'payment-qr.png',
-                base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJkAAAAASUVORK5CYII=')
-            ),
+        $this->postJson('/api/admin/users/'.$account->id.'/payment-qr', [
+            'payment_qr_url' => 'https://res.cloudinary.com/ordercafe/image/upload/payment-qr.png',
         ], $headers)->assertForbidden();
 
-        $this->assertNull($account->fresh()->payment_qr_path);
+        $this->assertDatabaseMissing('payment_settings', ['user_id' => $account->id]);
+    }
+
+    public function test_super_admin_can_update_and_clear_an_admin_payment_link(): void
+    {
+        $superAdmin = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'superadmin',
+        ]);
+        $account = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'controller',
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$superAdmin->createToken('test-super-admin')->plainTextToken,
+        ];
+        $paymentLink = 'https://pay.example.com/ordercafe';
+
+        $this->patchJson('/api/admin/users/'.$account->id.'/payment-link', [
+            'payment_link' => $paymentLink,
+        ], $headers)->assertOk()
+            ->assertJsonPath('data.payment_link', $paymentLink);
+
+        $this->assertDatabaseHas('payment_settings', [
+            'user_id' => $account->id,
+            'payment_link' => $paymentLink,
+        ]);
+
+        $this->patchJson('/api/admin/users/'.$account->id.'/payment-link', [
+            'payment_link' => null,
+        ], $headers)->assertOk()
+            ->assertJsonPath('data.payment_link', null);
+
+        $this->assertDatabaseHas('payment_settings', [
+            'user_id' => $account->id,
+            'payment_link' => null,
+        ]);
+    }
+
+    public function test_payment_settings_endpoints_validate_urls_and_restrict_target_to_admin_accounts(): void
+    {
+        $superAdmin = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'superadmin',
+        ]);
+        $customer = User::factory()->create(['is_admin' => false]);
+        $headers = [
+            'Authorization' => 'Bearer '.$superAdmin->createToken('test-super-admin')->plainTextToken,
+        ];
+
+        $this->postJson('/api/admin/users/'.$customer->id.'/payment-qr', [
+            'payment_qr_url' => 'https://res.cloudinary.com/ordercafe/image/upload/payment-qr.png',
+        ], $headers)->assertNotFound();
+
+        $this->postJson('/api/admin/users/'.$superAdmin->id.'/payment-qr', [
+            'payment_qr_url' => 'not a URL',
+        ], $headers)->assertUnprocessable()
+            ->assertJsonValidationErrors('payment_qr_url');
+
+        $this->patchJson('/api/admin/users/'.$superAdmin->id.'/payment-link', [
+            'payment_link' => 'not a URL',
+        ], $headers)->assertUnprocessable()
+            ->assertJsonValidationErrors('payment_link');
+    }
+
+    public function test_payment_settings_helpers_read_from_the_related_setting(): void
+    {
+        $user = User::factory()->create(['is_admin' => true]);
+        $qrUrl = 'https://res.cloudinary.com/ordercafe/image/upload/payment-qr.png';
+        $paymentLink = 'https://pay.example.com/ordercafe';
+
+        PaymentSetting::create([
+            'user_id' => $user->id,
+            'qr_image_url' => $qrUrl,
+            'payment_link' => $paymentLink,
+        ]);
+
+        $this->assertSame($qrUrl, $user->paymentQrImageUrl());
+        $this->assertSame($paymentLink, $user->paymentLink());
+    }
+
+    public function test_payment_settings_migration_moves_legacy_user_values_before_dropping_columns(): void
+    {
+        Schema::table('users', function (Blueprint $table): void {
+            $table->string('payment_qr_path', 1000)->nullable();
+            $table->string('payment_link', 1000)->nullable();
+        });
+        $user = User::factory()->create(['is_admin' => true]);
+        DB::table('users')->where('id', $user->id)->update([
+            'payment_qr_path' => 'payment-qr-codes/legacy.png',
+            'payment_link' => 'https://pay.example.com/legacy',
+        ]);
+
+        $migration = require database_path(
+            'migrations/2026_10_28_162900_move_payment_settings_from_users_table.php'
+        );
+        $migration->up();
+
+        $this->assertFalse(Schema::hasColumn('users', 'payment_qr_path'));
+        $this->assertFalse(Schema::hasColumn('users', 'payment_link'));
+        $this->assertDatabaseHas('payment_settings', [
+            'user_id' => $user->id,
+            'qr_image_url' => rtrim(config('app.url'), '/').'/storage/payment-qr-codes/legacy.png',
+            'payment_link' => 'https://pay.example.com/legacy',
+        ]);
     }
 
     public function test_mini_app_validates_signed_init_data_and_uses_database_prices(): void
@@ -162,12 +257,16 @@ class ApiBackendTest extends TestCase
         $botToken = 'test-bot-token';
         config(['services.telegram.bot_token' => $botToken]);
 
-        Storage::fake('public');
         $admin = User::factory()->create([
             'is_admin' => true,
-            'payment_qr_path' => 'payment-qr-codes/lunch.png',
         ]);
-        Storage::disk('public')->put($admin->payment_qr_path, 'test image');
+        $paymentQrUrl = 'https://res.cloudinary.com/ordercafe/image/upload/lunch.png';
+        $paymentLink = 'https://pay.example.com/lunch';
+        PaymentSetting::create([
+            'user_id' => $admin->id,
+            'qr_image_url' => $paymentQrUrl,
+            'payment_link' => $paymentLink,
+        ]);
         $session = OrderSession::create([
             'order_number' => 'SESSION-TEST-001',
             'title' => 'Lunch',
@@ -209,10 +308,8 @@ class ApiBackendTest extends TestCase
         ], ['X-Telegram-Init-Data' => $initData])
             ->assertCreated()
             ->assertJsonPath('data.total_amount', '7.50')
-            ->assertJsonPath(
-                'payment_qr_image_url',
-                Storage::disk('public')->url($admin->payment_qr_path)
-            );
+            ->assertJsonPath('payment_qr_image_url', $paymentQrUrl)
+            ->assertJsonPath('payment_link', $paymentLink);
 
         $order = Order::with('items', 'user')->firstOrFail();
         $this->assertSame('7.50', $order->total_amount);
@@ -229,10 +326,8 @@ class ApiBackendTest extends TestCase
         $this->getJson('/api/mini-app/my-order', ['X-Telegram-Init-Data' => $initData])
             ->assertOk()
             ->assertJsonPath('data.id', $order->id)
-            ->assertJsonPath(
-                'payment_qr_image_url',
-                Storage::disk('public')->url($admin->payment_qr_path)
-            );
+            ->assertJsonPath('payment_qr_image_url', $paymentQrUrl)
+            ->assertJsonPath('payment_link', $paymentLink);
     }
 
     public function test_order_submission_notifies_only_the_newest_active_verified_group_once(): void

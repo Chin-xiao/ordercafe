@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -26,10 +25,8 @@ class User extends Authenticatable
         'last_name',
         'phone',
         'role',
-        'payment_qr_path',
         'is_active',
         'is_admin',
-        'payment_link',
     ];
 
     protected $casts = [
@@ -78,26 +75,16 @@ class User extends Authenticatable
 
     public function paymentQrImageUrl(): ?string
     {
-        if (! $this->payment_qr_path) {
-            return null;
-        }
-
-        // If it's already an absolute URL (Cloudinary / external CDN), return directly
-        if (str_starts_with($this->payment_qr_path, 'http://') || str_starts_with($this->payment_qr_path, 'https://')) {
-            return $this->payment_qr_path;
-        }
-
-        // Fallback for older local storage files
-        return asset('storage/' . $this->payment_qr_path);
+        return $this->paymentSetting?->qr_image_url;
     }
+
     public function paymentSetting(): HasOne
-{
-    return $this->hasOne(PaymentSetting::class);
-}
+    {
+        return $this->hasOne(PaymentSetting::class);
+    }
 
-
-public function paymentLink(): ?string
-{
-    return $this->paymentSetting?->payment_link;
-}
+    public function paymentLink(): ?string
+    {
+        return $this->paymentSetting?->payment_link;
+    }
 }

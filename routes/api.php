@@ -91,17 +91,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
-
-    //super admin routes
+    // super admin routes
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users', [UserController::class, 'store']);
     Route::post('/users/{user}/payment-qr', [UserController::class, 'uploadPaymentQr']);
-    Route::delete('/users/{user}', [UserController::class, 'destroy']);
-});
-Route::middleware(['auth:sanctum', 'role:superadmin'])->prefix('admin')->group(function () {
-    // Existing users routes...
-    Route::post('/users/{user}/payment-qr', [UserController::class, 'uploadPaymentQr']);
-
-    // 👇 ADD THIS ROUTE:
     Route::patch('/users/{user}/payment-link', [UserController::class, 'updatePaymentLink']);
+    Route::delete('/users/{user}', [UserController::class, 'destroy']);
 });

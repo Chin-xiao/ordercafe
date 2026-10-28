@@ -159,23 +159,41 @@ Example response:
 }
 ```
 
-## Super-admin payment QR
+## Super-admin payment settings
 
-`POST /api/admin/users/{user}/payment-qr` uploads or replaces the public payment QR image for an admin account. It requires an active admin Sanctum token and the signed-in account must have `role: "superadmin"`. The target must be an admin account (`is_admin: true`). Send multipart form data with an `image` field; accepted formats are JPEG, PNG, and WebP, up to 5 MB.
+Payment QR image URLs and payment links are stored in the dedicated `payment_settings` table, one row per admin account. Both endpoints require an active admin Sanctum token, the signed-in account must have `role: "superadmin"`, and the target must be an admin account (`is_admin: true`).
 
-The existing `GET /api/admin/users` response includes each account's `payment_qr_image_url` (null until configured). A successful upload returns:
+`POST /api/admin/users/{user}/payment-qr` saves a Cloudinary URL provided by the frontend:
+
+```json
+{
+  "payment_qr_url": "https://res.cloudinary.com/example/image/upload/payment-qr.png"
+}
+```
+
+`payment_qr_url` is required and must be a URL of up to 1000 characters. A successful response is:
 
 ```json
 {
   "message": "Payment QR image updated successfully.",
   "data": {
     "user_id": 3,
-    "payment_qr_image_url": "https://example.com/storage/payment-qr-codes/example.png"
+    "payment_qr_image_url": "https://res.cloudinary.com/example/image/upload/payment-qr.png"
   }
 }
 ```
 
-When a customer submits an order through `POST /api/mini-app/orders`, the response includes the QR URL belonging to the admin account that created the order session. `GET /api/mini-app/my-order` also returns `payment_qr_image_url` at the response root so the Mini App can restore the QR after a refresh:
+`PATCH /api/admin/users/{user}/payment-link` saves or clears the payment link. The `payment_link` key must be included; it may be `null` to clear the setting, otherwise it must be a URL of up to 1000 characters.
+
+```json
+{
+  "payment_link": "https://pay.example.com/ordercafe"
+}
+```
+
+`GET /api/admin/users` includes `payment_qr_image_url` and `payment_link` for each account.
+
+When a customer submits an order through `POST /api/mini-app/orders`, the response includes the QR URL and payment link belonging to the admin account that created the order session. `GET /api/mini-app/my-order` also returns both fields at the response root so the Mini App can restore them after a refresh:
 
 ```json
 {
@@ -183,11 +201,12 @@ When a customer submits an order through `POST /api/mini-app/orders`, the respon
     "id": 92,
     "total_amount": "8.50"
   },
-  "payment_qr_image_url": "https://example.com/storage/payment-qr-codes/example.png"
+  "payment_qr_image_url": "https://res.cloudinary.com/example/image/upload/payment-qr.png",
+  "payment_link": "https://pay.example.com/ordercafe"
 }
 ```
 
-The separate [ordercafe-front](https://github.com/Chin-xiao/ordercafe-front) repository renders this image after checkout and on order refresh. Its **Later paid** action closes the Telegram Mini App; **Done paid** displays a thank-you message and then closes it. If the URL is null, no QR has been configured for that session's account. **Done paid** is a customer-side acknowledgement only; this API does not independently verify or record payment.
+The separate [ordercafe-front](https://github.com/Chin-xiao/ordercafe-front) repository renders this image after checkout and on order refresh, and shows **Pay Now** when `payment_link` is configured. Its **Later paid** action closes the Telegram Mini App; **Done paid** displays a thank-you message and then closes it. If a URL is null, that payment option is not configured for the session's account. **Done paid** is a customer-side acknowledgement only; this API does not independently verify or record payment.
 
 ## Mini App identity and existing APIs
 
@@ -197,8 +216,7 @@ Existing order, session, product, and reporting routes are unchanged. The React 
 
 ## Render deployment
 
-1. Deploy the code and run the new migration with the existing release/deploy migration process (`php artisan migrate --force`) against the configured PostgreSQL database.
+1. Deploy the code and run the new migration with the existing release/deploy migration process (`php artisan migrate --force`) against the configured PostgreSQL database. The migration copies existing QR/payment links into `payment_settings` and removes those legacy columns from `users`.
 2. Keep the existing `TELEGRAM_BOT_TOKEN` Render environment variable set for `@ahseven_bot`; no new secret or frontend token is required.
 3. Ensure `BUSINESS_TIMEZONE` is set to the business's timezone for date filtering (for example `Asia/Bangkok`).
-4. Ensure the configured public filesystem disk serves uploaded QR images and uses persistent storage in production.
-5. Deploy the Admin UI and Telegram Mini App separately; pass Telegram Web App `initData` unchanged to the existing Mini App API header.
+4. Deploy the Admin UI and Telegram Mini App separately; pass Telegram Web App `initData` unchanged to the existing Mini App API header.

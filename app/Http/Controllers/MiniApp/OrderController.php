@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Services\OrderService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -19,7 +20,7 @@ class OrderController extends Controller
         $this->orderService = $orderService;
     }
 
-    public function store(Request $request)
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'order_session_id' => ['required', 'exists:order_sessions,id'],
@@ -47,10 +48,12 @@ class OrderController extends Controller
         $user = $request->user();
 
         $order = $this->orderService->submitOrder($user, $validated);
+        $order->loadMissing('session.creator.paymentSetting');
 
         $creator = $order->session?->creator;
-        $paymentQrImageUrl = $creator?->paymentQrImageUrl();
-        $paymentLink = $creator?->payment_link;
+        $paymentSetting = $creator?->paymentSetting;
+        $paymentQrImageUrl = $paymentSetting?->qr_image_url;
+        $paymentLink = $paymentSetting?->payment_link;
 
         $order->session?->unsetRelation('creator');
 
@@ -62,7 +65,7 @@ class OrderController extends Controller
         ], 201);
     }
 
-    public function myOrder(Request $request)
+    public function myOrder(Request $request): JsonResponse
     {
         $session = OrderSession::query()->where('status', 'open')->latest('started_at')->first();
         $order = $session
@@ -72,13 +75,13 @@ class OrderController extends Controller
                 ->first()
             : null;
 
-        $creator = $order?->session?->creator;
-        $setting = $creator?->paymentSetting;
+        $paymentSetting = $order?->session?->creator?->paymentSetting;
+        $order?->session?->unsetRelation('creator');
 
         return response()->json([
             'data' => $order,
-            'payment_qr_image_url' => $setting?->qr_image_url,
-            'payment_link'         => $setting?->payment_link,
+            'payment_qr_image_url' => $paymentSetting?->qr_image_url,
+            'payment_link' => $paymentSetting?->payment_link,
         ]);
     }
 }
