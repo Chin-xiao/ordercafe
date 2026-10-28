@@ -4,11 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Cloudinary\Cloudinary;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class UserController extends Controller
 {
@@ -64,26 +64,35 @@ class UserController extends Controller
             'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
-        $newPath = $validated['image']->storePublicly('payment-qr-codes', 'public');
-        if (! $newPath) {
-            return response()->json(['message' => 'The payment QR image could not be saved.'], 500);
-        }
-
-        $previousPath = $user->payment_qr_path;
-
         try {
-            $user->update(['payment_qr_path' => $newPath]);
+            // 1. Initialize Cloudinary
+            $cloudinary = new Cloudinary(env('CLOUDINARY_URL'));
+
+            // 2. Upload image file to Cloudinary
+            $uploadResult = $cloudinary->uploadApi()->upload(
+                $validated['image']->getRealPath(),
+                [
+                    'folder' => 'ordercafe/payment-qr-codes',
+                    'public_id' => 'user_qr_' . $user->id . '_' . time(),
+                    'resource_type' => 'image',
+                ]
+            );
+
+            // 3. Get the secure HTTPS CDN URL
+            $secureUrl = $uploadResult['secure_url'];
+
         } catch (\Throwable $exception) {
-            Storage::disk('public')->delete($newPath);
-            throw $exception;
+            Log::error('Cloudinary upload failed: ' . $exception->getMessage(), [
+                'user_id' => $user->id,
+            ]);
+
+            return response()->json([
+                'message' => 'The payment QR image could not be uploaded to cloud storage.',
+            ], 500);
         }
 
-        if ($previousPath && ! Storage::disk('public')->delete($previousPath)) {
-            Log::warning('A replaced payment QR image could not be removed.', [
-                'user_id' => $user->id,
-                'path' => $previousPath,
-            ]);
-        }
+        // 4. Save the Cloudinary HTTPS URL directly into the database column
+        $user->update(['payment_qr_path' => $secureUrl]);
 
         return response()->json([
             'message' => 'Payment QR image updated successfully.',
@@ -93,6 +102,7 @@ class UserController extends Controller
             ],
         ]);
     }
+
 
     public function destroy(User $user)
     {
