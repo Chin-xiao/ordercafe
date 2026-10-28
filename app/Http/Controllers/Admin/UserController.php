@@ -55,7 +55,7 @@ class UserController extends Controller
         ], 201);
     }
 
-   public function uploadPaymentQr(Request $request, User $user)
+  public function uploadPaymentQr(Request $request, User $user)
     {
         abort_unless($request->user()->role === 'superadmin', 403, 'Only super admins can manage payment QR images.');
         abort_unless($user->is_admin, 404, 'User is not an admin.');
@@ -64,29 +64,29 @@ class UserController extends Controller
             'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
+        // 1. Initialize Cloudinary
+        $cloudName = config('services.cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
+        $apiKey    = config('services.cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
+        $apiSecret = config('services.cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
+
+        if ($cloudName && $apiKey && $apiSecret) {
+            $cloudinary = new \Cloudinary\Cloudinary([
+                'cloud' => [
+                    'cloud_name' => $cloudName,
+                    'api_key'    => $apiKey,
+                    'api_secret' => $apiSecret,
+                ],
+                'url' => [
+                    'secure' => true,
+                ],
+            ]);
+        } else {
+            $cloudinaryUrl = config('services.cloudinary.url') ?? env('CLOUDINARY_URL');
+            $cloudinary = new \Cloudinary\Cloudinary($cloudinaryUrl);
+        }
+
+        // 2. Upload image to Cloudinary
         try {
-            // Prefer individual credentials, fallback to full CLOUDINARY_URL
-            $cloudName = config('services.cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
-            $apiKey    = config('services.cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
-            $apiSecret = config('services.cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
-
-            if ($cloudName && $apiKey && $apiSecret) {
-                $cloudinary = new \Cloudinary\Cloudinary([
-                    'cloud' => [
-                        'cloud_name' => $cloudName,
-                        'api_key'    => $apiKey,
-                        'api_secret' => $apiSecret,
-                    ],
-                    'url' => [
-                        'secure' => true,
-                    ],
-                ]);
-            } else {
-                $cloudinaryUrl = config('services.cloudinary.url') ?? env('CLOUDINARY_URL');
-                $cloudinary = new \Cloudinary\Cloudinary($cloudinaryUrl);
-            }
-
-            // 1. Upload new image
             $uploadResult = $cloudinary->uploadApi()->upload(
                 $validated['image']->getRealPath(),
                 [
@@ -111,10 +111,9 @@ class UserController extends Controller
             ], 500);
         }
 
-        // 2. Optional: Remove old image from Cloudinary if it exists
+        // 3. Remove old image from Cloudinary if one previously existed
         if ($user->payment_qr_path && str_contains($user->payment_qr_path, 'cloudinary.com')) {
             try {
-                // Extract public_id from Cloudinary URL: folder/filename (without file extension)
                 $pathParts = parse_url($user->payment_qr_path, PHP_URL_PATH);
                 if (preg_match('#upload/(?:v\d+/)?(.+)\.[a-zA-Z0-9]+$#', $pathParts, $matches)) {
                     $oldPublicId = $matches[1];
@@ -125,7 +124,7 @@ class UserController extends Controller
             }
         }
 
-        // 3. Save the new secure URL to the database
+        // 4. Save new URL in database
         $user->update(['payment_qr_path' => $secureUrl]);
 
         return response()->json([
