@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Storage;
@@ -89,4 +90,14 @@ class User extends Authenticatable
         // Fallback for older local storage files
         return asset('storage/' . $this->payment_qr_path);
     }
+    public function paymentSetting(): HasOne
+{
+    return $this->hasOne(PaymentSetting::class);
+}
+
+
+public function paymentLink(): ?string
+{
+    return $this->paymentSetting?->payment_link;
+}
 }

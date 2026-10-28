@@ -189,26 +189,18 @@ class UserController extends Controller
             'payment_link' => ['nullable', 'url', 'max:1000'],
         ]);
 
-        try {
-            $user->update([
-                'payment_link' => $validated['payment_link'] ?? null,
-            ]);
+        $setting = $user->paymentSetting()->updateOrCreate(
+            ['user_id' => $user->id],
+            ['payment_link' => $validated['payment_link'] ?? null]
+        );
 
-            return response()->json([
-                'message' => 'Payment link updated successfully.',
-                'data'    => [
-                    'user_id'      => $user->id,
-                    'payment_link' => $user->payment_link,
-                ],
-            ]);
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to update payment link: ' . $e->getMessage());
-
-            return response()->json([
-                'message' => 'Failed to update payment link.',
-                'error'   => $e->getMessage(), // <-- Returns the exact SQL/PHP error
-            ], 500);
-        }
+        return response()->json([
+            'message' => 'Payment link updated successfully.',
+            'data'    => [
+                'user_id'      => $user->id,
+                'payment_link' => $setting->payment_link,
+            ],
+        ]);
     }
 }
 

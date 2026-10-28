@@ -68,16 +68,17 @@ class OrderController extends Controller
         $order = $session
             ? $session->orders()
                 ->where('user_id', $request->user()->id)
-                ->with('items', 'session.creator')
+                ->with(['items', 'session.creator.paymentSetting'])
                 ->first()
             : null;
 
         $creator = $order?->session?->creator;
+        $setting = $creator?->paymentSetting;
 
         return response()->json([
             'data' => $order,
-            'payment_qr_image_url' => $creator?->paymentQrImageUrl(),
-            'payment_link' => $creator?->payment_link,
+            'payment_qr_image_url' => $setting?->qr_image_url,
+            'payment_link'         => $setting?->payment_link,
         ]);
     }
 }
