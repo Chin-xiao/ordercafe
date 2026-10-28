@@ -179,7 +179,7 @@ class UserController extends Controller
 
         return response()->noContent();
     }
-    
+
     public function updatePaymentLink(Request $request, User $user)
     {
         abort_unless($request->user()->role === 'superadmin', 403, 'Only super admins can manage payment links.');
@@ -189,17 +189,26 @@ class UserController extends Controller
             'payment_link' => ['nullable', 'url', 'max:1000'],
         ]);
 
-        $user->update([
-            'payment_link' => $validated['payment_link'] ?? null,
-        ]);
+        try {
+            $user->update([
+                'payment_link' => $validated['payment_link'] ?? null,
+            ]);
 
-        return response()->json([
-            'message' => 'Payment link updated successfully.',
-            'data'    => [
-                'user_id'      => $user->id,
-                'payment_link' => $user->payment_link,
-            ],
-        ]);
+            return response()->json([
+                'message' => 'Payment link updated successfully.',
+                'data'    => [
+                    'user_id'      => $user->id,
+                    'payment_link' => $user->payment_link,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to update payment link: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'Failed to update payment link.',
+                'error'   => $e->getMessage(), // <-- Returns the exact SQL/PHP error
+            ], 500);
+        }
     }
 }
 
