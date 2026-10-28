@@ -28,6 +28,7 @@ class User extends Authenticatable
         'payment_qr_path',
         'is_active',
         'is_admin',
+        'payment_link',
     ];
 
     protected $casts = [

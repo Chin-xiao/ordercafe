@@ -47,13 +47,18 @@ class OrderController extends Controller
         $user = $request->user();
 
         $order = $this->orderService->submitOrder($user, $validated);
-        $paymentQrImageUrl = $order->session?->creator?->paymentQrImageUrl();
+
+        $creator = $order->session?->creator;
+        $paymentQrImageUrl = $creator?->paymentQrImageUrl();
+        $paymentLink = $creator?->payment_link;
+
         $order->session?->unsetRelation('creator');
 
         return response()->json([
             'message' => 'Order submitted successfully',
             'data' => $order,
             'payment_qr_image_url' => $paymentQrImageUrl,
+            'payment_link' => $paymentLink,
         ], 201);
     }
 
@@ -67,9 +72,12 @@ class OrderController extends Controller
                 ->first()
             : null;
 
+        $creator = $order?->session?->creator;
+
         return response()->json([
             'data' => $order,
-            'payment_qr_image_url' => $order?->session?->creator?->paymentQrImageUrl(),
+            'payment_qr_image_url' => $creator?->paymentQrImageUrl(),
+            'payment_link' => $creator?->payment_link,
         ]);
     }
 }

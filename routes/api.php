@@ -35,6 +35,7 @@ Route::prefix('mini-app')->middleware(['telegram.mini.app'])->group(function () 
 
     Route::post('/orders', [OrderController::class, 'store']);
     Route::get('/my-order', [OrderController::class, 'myOrder']);
+
 });
 
 /*
@@ -96,4 +97,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/users', [UserController::class, 'store']);
     Route::post('/users/{user}/payment-qr', [UserController::class, 'uploadPaymentQr']);
     Route::delete('/users/{user}', [UserController::class, 'destroy']);
+
+    Route::patch('/admin/users/{user}/payment-link', [UserController::class, 'updatePaymentLink']);
 });

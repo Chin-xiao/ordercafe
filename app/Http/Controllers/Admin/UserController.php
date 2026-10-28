@@ -179,4 +179,27 @@ class UserController extends Controller
 
         return response()->noContent();
     }
+    
+    public function updatePaymentLink(Request $request, User $user)
+    {
+        abort_unless($request->user()->role === 'superadmin', 403, 'Only super admins can manage payment links.');
+        abort_unless($user->is_admin, 404, 'User is not an admin.');
+
+        $validated = $request->validate([
+            'payment_link' => ['nullable', 'url', 'max:1000'],
+        ]);
+
+        $user->update([
+            'payment_link' => $validated['payment_link'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Payment link updated successfully.',
+            'data'    => [
+                'user_id'      => $user->id,
+                'payment_link' => $user->payment_link,
+            ],
+        ]);
+    }
 }
+
