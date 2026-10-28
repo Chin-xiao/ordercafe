@@ -75,17 +75,17 @@ class User extends Authenticatable
     }
 
     public function paymentQrImageUrl(): ?string
-     {
-            if (!$this->payment_qr_path) {
-                return null;
-            }
+    {
+        if (! $this->payment_qr_path) {
+            return null;
+        }
 
-            // Returns the Cloudinary HTTPS URL directly
-            if (str_starts_with($this->payment_qr_path, 'http://') || str_starts_with($this->payment_qr_path, 'https://')) {
-                return $this->payment_qr_path;
-            }
+        // If it's already an absolute URL (Cloudinary / external CDN), return directly
+        if (str_starts_with($this->payment_qr_path, 'http://') || str_starts_with($this->payment_qr_path, 'https://')) {
+            return $this->payment_qr_path;
+        }
 
-            // Fallback for older local uploads
-            return asset('storage/' . $this->payment_qr_path);
+        // Fallback for older local storage files
+        return asset('storage/' . $this->payment_qr_path);
     }
 }

@@ -57,14 +57,16 @@ class UserController extends Controller
 
   public function uploadPaymentQr(Request $request, User $user)
     {
+        // 1. Authorization checks
         abort_unless($request->user()->role === 'superadmin', 403, 'Only super admins can manage payment QR images.');
         abort_unless($user->is_admin, 404, 'User is not an admin.');
 
+        // 2. Validate input file
         $validated = $request->validate([
             'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
-        // 1. Initialize Cloudinary
+        // 3. Initialize Cloudinary
         $cloudName = config('services.cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
         $apiKey    = config('services.cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
         $apiSecret = config('services.cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
@@ -72,9 +74,9 @@ class UserController extends Controller
         if ($cloudName && $apiKey && $apiSecret) {
             $cloudinary = new \Cloudinary\Cloudinary([
                 'cloud' => [
-                    'cloud_name' => $cloudName,
-                    'api_key'    => $apiKey,
-                    'api_secret' => $apiSecret,
+                    'cloud_name' => trim($cloudName),
+                    'api_key'    => trim($apiKey),
+                    'api_secret' => trim($apiSecret),
                 ],
                 'url' => [
                     'secure' => true,
@@ -82,19 +84,26 @@ class UserController extends Controller
             ]);
         } else {
             $cloudinaryUrl = config('services.cloudinary.url') ?? env('CLOUDINARY_URL');
-            $cloudinary = new \Cloudinary\Cloudinary($cloudinaryUrl);
+            $cloudinary = new \Cloudinary\Cloudinary(trim($cloudinaryUrl));
         }
 
-        // 2. Upload image to Cloudinary
+        // 4. Upload file to Cloudinary
         try {
+            $uploadOptions = [
+                'folder'        => 'ordercafe/payment-qr-codes',
+                'public_id'     => 'user_qr_' . $user->id . '_' . time(),
+                'resource_type' => 'image',
+                'overwrite'     => true,
+            ];
+
+            // If an unsigned upload preset is configured, attach it to avoid permission issues
+            if (env('CLOUDINARY_UPLOAD_PRESET')) {
+                $uploadOptions['upload_preset'] = env('CLOUDINARY_UPLOAD_PRESET');
+            }
+
             $uploadResult = $cloudinary->uploadApi()->upload(
                 $validated['image']->getRealPath(),
-                [
-                    'folder'        => 'ordercafe/payment-qr-codes',
-                    'public_id'     => 'user_qr_' . $user->id . '_' . time(),
-                    'resource_type' => 'image',
-                    'overwrite'     => true,
-                ]
+                $uploadOptions
             );
 
             $secureUrl = $uploadResult['secure_url'];
@@ -111,21 +120,27 @@ class UserController extends Controller
             ], 500);
         }
 
-        // 3. Remove old image from Cloudinary if one previously existed
+        // 5. Cleanup previous Cloudinary image if it exists
         if ($user->payment_qr_path && str_contains($user->payment_qr_path, 'cloudinary.com')) {
             try {
-                $pathParts = parse_url($user->payment_qr_path, PHP_URL_PATH);
-                if (preg_match('#upload/(?:v\d+/)?(.+)\.[a-zA-Z0-9]+$#', $pathParts, $matches)) {
+                $path = parse_url($user->payment_qr_path, PHP_URL_PATH);
+                // Matches everything after /upload/(v\d+/)? up to the file extension
+                if (preg_match('#/upload/(?:v\d+/)?(.+?)\.[a-zA-Z0-9]+$#', $path, $matches)) {
                     $oldPublicId = $matches[1];
                     $cloudinary->uploadApi()->destroy($oldPublicId);
                 }
             } catch (\Throwable $e) {
-                Log::warning('Failed to delete previous Cloudinary QR code: ' . $e->getMessage());
+                Log::warning('Failed to delete previous Cloudinary QR code: ' . $e->getMessage(), [
+                    'user_id' => $user->id,
+                    'path'    => $user->payment_qr_path,
+                ]);
             }
         }
 
-        // 4. Save new URL in database
-        $user->update(['payment_qr_path' => $secureUrl]);
+        // 6. Update user record with the new public URL
+        $user->update([
+            'payment_qr_path' => $secureUrl,
+        ]);
 
         return response()->json([
             'message' => 'Payment QR image updated successfully.',
