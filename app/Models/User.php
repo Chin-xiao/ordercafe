@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -24,6 +25,7 @@ class User extends Authenticatable
         'last_name',
         'phone',
         'role',
+        'payment_qr_path',
         'is_active',
         'is_admin',
     ];
@@ -70,5 +72,12 @@ class User extends Authenticatable
     public function activityLogs()
     {
         return $this->hasMany(ActivityLog::class);
+    }
+
+    public function paymentQrImageUrl(): ?string
+    {
+        return $this->payment_qr_path
+            ? Storage::disk('public')->url($this->payment_qr_path)
+            : null;
     }
 }

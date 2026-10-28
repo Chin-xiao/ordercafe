@@ -94,5 +94,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     //super admin routes
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users', [UserController::class, 'store']);
+    Route::post('/users/{user}/payment-qr', [UserController::class, 'uploadPaymentQr']);
     Route::delete('/users/{user}', [UserController::class, 'destroy']);
 });

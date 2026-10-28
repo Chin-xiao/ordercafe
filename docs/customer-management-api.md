@@ -159,6 +159,36 @@ Example response:
 }
 ```
 
+## Super-admin payment QR
+
+`POST /api/admin/users/{user}/payment-qr` uploads or replaces the public payment QR image for an admin account. It requires an active admin Sanctum token and the signed-in account must have `role: "superadmin"`. The target must be an admin account (`is_admin: true`). Send multipart form data with an `image` field; accepted formats are JPEG, PNG, and WebP, up to 5 MB.
+
+The existing `GET /api/admin/users` response includes each account's `payment_qr_image_url` (null until configured). A successful upload returns:
+
+```json
+{
+  "message": "Payment QR image updated successfully.",
+  "data": {
+    "user_id": 3,
+    "payment_qr_image_url": "https://example.com/storage/payment-qr-codes/example.png"
+  }
+}
+```
+
+When a customer submits an order through `POST /api/mini-app/orders`, the response includes the QR URL belonging to the admin account that created the order session. `GET /api/mini-app/my-order` also returns `payment_qr_image_url` at the response root so the Mini App can restore the QR after a refresh:
+
+```json
+{
+  "data": {
+    "id": 92,
+    "total_amount": "8.50"
+  },
+  "payment_qr_image_url": "https://example.com/storage/payment-qr-codes/example.png"
+}
+```
+
+The separate [ordercafe-front](https://github.com/Chin-xiao/ordercafe-front) repository renders this image after checkout and on order refresh. Its **Later paid** action closes the Telegram Mini App; **Done paid** displays a thank-you message and then closes it. If the URL is null, no QR has been configured for that session's account. **Done paid** is a customer-side acknowledgement only; this API does not independently verify or record payment.
+
 ## Mini App identity and existing APIs
 
 Order submission remains `POST /api/mini-app/orders`. The existing `telegram.mini.app` middleware verifies Telegram's signed `initData` from `X-Telegram-Init-Data` (or the existing `init_data` request input), upserts the user by unique Telegram ID, and uses that server-verified user for `orders.user_id`. Never use a frontend-supplied Telegram ID/name as customer identity.
@@ -170,4 +200,5 @@ Existing order, session, product, and reporting routes are unchanged. The React 
 1. Deploy the code and run the new migration with the existing release/deploy migration process (`php artisan migrate --force`) against the configured PostgreSQL database.
 2. Keep the existing `TELEGRAM_BOT_TOKEN` Render environment variable set for `@ahseven_bot`; no new secret or frontend token is required.
 3. Ensure `BUSINESS_TIMEZONE` is set to the business's timezone for date filtering (for example `Asia/Bangkok`).
-4. Deploy the Admin UI separately and pass Telegram Web App `initData` unchanged to the existing Mini App API header.
+4. Ensure the configured public filesystem disk serves uploaded QR images and uses persistent storage in production.
+5. Deploy the Admin UI and Telegram Mini App separately; pass Telegram Web App `initData` unchanged to the existing Mini App API header.

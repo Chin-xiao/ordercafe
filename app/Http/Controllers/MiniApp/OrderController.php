@@ -36,8 +36,8 @@ class OrderController extends Controller
 
         $startParam = $request->attributes->get('telegram_web_app_start_param');
         if ($startParam !== null
-            && (!is_string($startParam)
-                || !ctype_digit($startParam)
+            && (! is_string($startParam)
+                || ! ctype_digit($startParam)
                 || (string) $validated['order_session_id'] !== $startParam)) {
             throw ValidationException::withMessages([
                 'order_session_id' => ['The selected order session does not match this Telegram Mini App link.'],
@@ -47,10 +47,13 @@ class OrderController extends Controller
         $user = $request->user();
 
         $order = $this->orderService->submitOrder($user, $validated);
+        $paymentQrImageUrl = $order->session?->creator?->paymentQrImageUrl();
+        $order->session?->unsetRelation('creator');
 
         return response()->json([
             'message' => 'Order submitted successfully',
-            'data' => $order
+            'data' => $order,
+            'payment_qr_image_url' => $paymentQrImageUrl,
         ], 201);
     }
 
@@ -60,10 +63,13 @@ class OrderController extends Controller
         $order = $session
             ? $session->orders()
                 ->where('user_id', $request->user()->id)
-                ->with('items', 'session')
+                ->with('items', 'session.creator')
                 ->first()
             : null;
 
-        return response()->json(['data' => $order]);
+        return response()->json([
+            'data' => $order,
+            'payment_qr_image_url' => $order?->session?->creator?->paymentQrImageUrl(),
+        ]);
     }
 }

@@ -14,6 +14,7 @@ use App\Services\MiniAppCatalogCache;
 use App\Services\TelegramService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -21,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ApiBackendTest extends TestCase
@@ -92,12 +94,80 @@ class ApiBackendTest extends TestCase
             ->assertJsonFragment(['name' => 'Snacks']);
     }
 
+    public function test_super_admin_can_upload_a_payment_qr_for_an_admin_account(): void
+    {
+        Storage::fake('public');
+
+        $superAdmin = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'superadmin',
+        ]);
+        $account = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'controller',
+        ]);
+        $headers = [
+            'Authorization' => 'Bearer '.$superAdmin->createToken('test-super-admin')->plainTextToken,
+            'Accept' => 'application/json',
+        ];
+        $image = UploadedFile::fake()->createWithContent(
+            'payment-qr.png',
+            base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJkAAAAASUVORK5CYII=')
+        );
+
+        $response = $this->post('/api/admin/users/'.$account->id.'/payment-qr', [
+            'image' => $image,
+        ], $headers)->assertOk()
+            ->assertJsonPath('data.user_id', $account->id);
+
+        $account->refresh();
+        $this->assertNotNull($account->payment_qr_path);
+        Storage::disk('public')->assertExists($account->payment_qr_path);
+        $this->assertSame(
+            Storage::disk('public')->url($account->payment_qr_path),
+            $response->json('data.payment_qr_image_url')
+        );
+
+        $this->getJson('/api/admin/users', $headers)
+            ->assertOk()
+            ->assertJsonFragment([
+                'payment_qr_image_url' => $response->json('data.payment_qr_image_url'),
+            ]);
+    }
+
+    public function test_non_super_admin_cannot_upload_a_payment_qr(): void
+    {
+        $admin = User::factory()->create([
+            'is_admin' => true,
+            'role' => 'controller',
+        ]);
+        $account = User::factory()->create(['is_admin' => true]);
+        $headers = [
+            'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
+            'Accept' => 'application/json',
+        ];
+
+        $this->post('/api/admin/users/'.$account->id.'/payment-qr', [
+            'image' => UploadedFile::fake()->createWithContent(
+                'payment-qr.png',
+                base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJkAAAAASUVORK5CYII=')
+            ),
+        ], $headers)->assertForbidden();
+
+        $this->assertNull($account->fresh()->payment_qr_path);
+    }
+
     public function test_mini_app_validates_signed_init_data_and_uses_database_prices(): void
     {
         $botToken = 'test-bot-token';
         config(['services.telegram.bot_token' => $botToken]);
 
-        $admin = User::factory()->create(['is_admin' => true]);
+        Storage::fake('public');
+        $admin = User::factory()->create([
+            'is_admin' => true,
+            'payment_qr_path' => 'payment-qr-codes/lunch.png',
+        ]);
+        Storage::disk('public')->put($admin->payment_qr_path, 'test image');
         $session = OrderSession::create([
             'order_number' => 'SESSION-TEST-001',
             'title' => 'Lunch',
@@ -138,7 +208,11 @@ class ApiBackendTest extends TestCase
             ]],
         ], ['X-Telegram-Init-Data' => $initData])
             ->assertCreated()
-            ->assertJsonPath('data.total_amount', '7.50');
+            ->assertJsonPath('data.total_amount', '7.50')
+            ->assertJsonPath(
+                'payment_qr_image_url',
+                Storage::disk('public')->url($admin->payment_qr_path)
+            );
 
         $order = Order::with('items', 'user')->firstOrFail();
         $this->assertSame('7.50', $order->total_amount);
@@ -151,6 +225,14 @@ class ApiBackendTest extends TestCase
             'email' => 'telegram123456789@users.invalid',
         ]);
         $this->assertArrayNotHasKey('password', $order->user->toArray());
+
+        $this->getJson('/api/mini-app/my-order', ['X-Telegram-Init-Data' => $initData])
+            ->assertOk()
+            ->assertJsonPath('data.id', $order->id)
+            ->assertJsonPath(
+                'payment_qr_image_url',
+                Storage::disk('public')->url($admin->payment_qr_path)
+            );
     }
 
     public function test_order_submission_notifies_only_the_newest_active_verified_group_once(): void
