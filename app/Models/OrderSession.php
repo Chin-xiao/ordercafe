@@ -47,4 +47,7 @@ class OrderSession extends Model
     {
         return $this->hasMany(TelegramMessage::class);
     }
+    public function store() {
+    return $this->belongsTo(Store::class);
+}
 }

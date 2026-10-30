@@ -87,4 +87,8 @@ class User extends Authenticatable
     {
         return $this->paymentSetting?->payment_link;
     }
+    public function store() {
+    return $this->belongsTo(Store::class);
+}
+
 }

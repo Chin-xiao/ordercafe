@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\TelegramSettingsController;
 use App\Http\Controllers\Admin\TelegramWebhookDiagnosticsController;
 use App\Http\Controllers\Admin\UserController;
+use App\Http\Controllers\Api\SuperAdmin\StoreController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
@@ -101,4 +102,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/users/{user}/payment-qr', [UserController::class, 'uploadPaymentQr']);
     Route::patch('/users/{user}/payment-link', [UserController::class, 'updatePaymentLink']);
     Route::delete('/users/{user}', [UserController::class, 'destroy']);
+});
+
+//Super Admin controller
+Route::middleware(['auth:sanctum'])->group(function () {
+    // Super Admin Store routes
+    Route::get('/super-admin/stores', [StoreController::class, 'index']);
+    Route::post('/super-admin/stores', [StoreController::class, 'store']);
 });
