@@ -38,6 +38,10 @@ Route::prefix('mini-app')->middleware(['telegram.mini.app'])->group(function () 
 
 });
 
+//Check healthy
+Route::get('/health', function () {
+    return response()->json(['status' => 'healthy'], 200);
+});
 /*
 |--------------------------------------------------------------------------
 | Admin Panel Routes (Protected by Sanctum & Admin Middleware)
