@@ -45,7 +45,11 @@ class AuthController extends Controller
             ], 401);
         }
 
-        if (!$user->is_admin || !$user->is_active) {
+        // FIX: Allow both super admins (is_admin=true / role=superadmin) AND store owners
+        $isSuperAdmin = $user->is_admin || $user->role === 'superadmin';
+        $isStoreOwner = $user->role === 'store_owner';
+
+        if ((!$isSuperAdmin && !$isStoreOwner) || !$user->is_active) {
             return response()->json([
                 'message' => 'You are not authorized to access the admin panel.',
             ], 403);
