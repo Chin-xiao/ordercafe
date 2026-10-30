@@ -4,13 +4,18 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
 {
-    public function index()
+    /**
+     * List all admin/controller users with their payment settings.
+     */
+    public function index(): JsonResponse
     {
         $users = User::query()
             ->select('id', 'name', 'email', 'role', 'is_admin', 'created_at')
@@ -31,13 +36,16 @@ class UserController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    /**
+     * Create a new administrator / controller user.
+     */
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6',
-            'role' => 'required|in:superadmin,controller',
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:6'],
+            'role' => ['required', 'in:superadmin,controller'],
         ]);
 
         $user = User::create([
@@ -55,7 +63,12 @@ class UserController extends Controller
         ], 201);
     }
 
-    public function uploadPaymentQr(Request $request, User $user)
+    /**
+     * SuperAdmin endpoint to set or replace an admin's payment QR image URL.
+     *
+     * POST /admin/users/{user}/payment-qr
+     */
+    public function uploadPaymentQr(Request $request, User $user): JsonResponse
     {
         abort_unless(
             $request->user()?->role === 'superadmin',
@@ -82,19 +95,12 @@ class UserController extends Controller
         ]);
     }
 
-    public function destroy(User $user)
-    {
-        // Prevent deleting yourself
-        if ($user->id === Auth::id()) {
-            return response()->json(['message' => 'You cannot delete your own account.'], 403);
-        }
-
-        $user->delete();
-
-        return response()->noContent();
-    }
-
-    public function updatePaymentLink(Request $request, User $user)
+    /**
+     * SuperAdmin endpoint to update or clear an admin's direct payment link.
+     *
+     * PATCH /admin/users/{user}/payment-link
+     */
+    public function updatePaymentLink(Request $request, User $user): JsonResponse
     {
         abort_unless(
             $request->user()?->role === 'superadmin',
@@ -119,5 +125,19 @@ class UserController extends Controller
                 'payment_link' => $setting->payment_link,
             ],
         ]);
+    }
+
+    /**
+     * Remove an admin user.
+     */
+    public function destroy(User $user): Response|JsonResponse
+    {
+        if ($user->id === Auth::id()) {
+            return response()->json(['message' => 'You cannot delete your own account.'], 403);
+        }
+
+        $user->delete();
+
+        return response()->noContent();
     }
 }

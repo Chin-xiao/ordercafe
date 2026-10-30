@@ -2,37 +2,16 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Model;
+use App\Models\Traits\BelongsToStore;
 use App\Models\OrderItem;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Database\Eloquent\Model;
+
 class Order extends Model
 {
-    protected static function booted(): void
-    {
-        // 1. Automatically filter queries by store_id if logged in as a store owner
-        static::addGlobalScope('store', function (Builder $builder) {
-            if (Auth::check()) {
-                $user = Auth::user();
-                if ($user->role === 'store_owner' && $user->store_id) {
-                    $builder->where('orders.store_id', $user->store_id);
-                }
-            }
-        });
-
-        // 2. Automatically assign store_id when creating an order
-        static::creating(function ($model) {
-            if (Auth::check()) {
-                $user = Auth::user();
-                if ($user->role === 'store_owner' && empty($model->store_id)) {
-                    $model->store_id = $user->store_id;
-                }
-            }
-        });
-    }
+    use BelongsToStore;
 
     protected $fillable = [
-        'store_id', // <-- Added here
+        'store_id',
         'order_number',
         'order_session_id',
         'user_id',
@@ -61,10 +40,5 @@ class Order extends Model
     public function items()
     {
         return $this->hasMany(OrderItem::class);
-    }
-
-    public function store()
-    {
-        return $this->belongsTo(Store::class);
     }
 }

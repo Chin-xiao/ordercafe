@@ -2,45 +2,25 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToStore;
 use App\Services\MiniAppCatalogCache;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Auth;
+
 class Product extends Model
 {
-    use SoftDeletes;
+    use SoftDeletes, BelongsToStore;
 
     protected static function booted(): void
     {
-        // 1. Keep your existing cache clearing logic
+        // Cache clearing on product changes
         static::saved(fn () => MiniAppCatalogCache::forget());
         static::deleted(fn () => MiniAppCatalogCache::forget());
         static::restored(fn () => MiniAppCatalogCache::forget());
-
-        // 2. Automatically filter queries by store_id if logged in as a store owner
-        static::addGlobalScope('store', function (Builder $builder) {
-            if (Auth::check()) {
-                $user = Auth::user();
-                if ($user->role === 'store_owner' && $user->store_id) {
-                    $builder->where('products.store_id', $user->store_id);
-                }
-            }
-        });
-
-        // 3. Automatically assign store_id when a store owner creates a product
-        static::creating(function ($model) {
-            if (Auth::check()) {
-                $user = Auth::user();
-                if ($user->role === 'store_owner' && empty($model->store_id)) {
-                    $model->store_id = $user->store_id;
-                }
-            }
-        });
     }
 
     protected $fillable = [
-        'store_id', // <-- Added here
+        'store_id',
         'category_id',
         'name',
         'description',
@@ -66,10 +46,5 @@ class Product extends Model
     public function orderItems()
     {
         return $this->hasMany(OrderItem::class);
-    }
-
-    public function store()
-    {
-        return $this->belongsTo(Store::class);
     }
 }

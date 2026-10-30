@@ -2,13 +2,17 @@
 
 namespace App\Models\Scopes;
 
-use App\Http\Controllers\Admin\UserController;
-use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Scope;
 use Illuminate\Support\Facades\Auth;
 
+/**
+ * @deprecated Use the App\Models\Traits\BelongsToStore trait instead.
+ *
+ * This class-based scope is kept for backward compatibility. The trait provides
+ * both the global scope AND the auto-stamping creating hook in one package.
+ */
 class StoreScope implements Scope
 {
     public function apply(Builder $builder, Model $model): void
