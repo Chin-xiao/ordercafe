@@ -4,14 +4,18 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\TelegramGroup;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class TelegramSettingsController extends Controller
 {
-    public function show()
+    public function show(Request $request)
     {
-        $linkedGroup = $this->linkedGroup();
+        $storeId = $request->user()->store_id;
+
+        $linkedGroup = $this->linkedGroup($storeId);
         $pendingGroup = TelegramGroup::query()
+            ->where('store_id', $storeId)
             ->where('is_verified', false)
             ->whereNull('telegram_chat_id')
             ->whereNotNull('verify_token')
@@ -19,7 +23,7 @@ class TelegramSettingsController extends Controller
             ->first();
 
         if (! $pendingGroup && ! $linkedGroup) {
-            $pendingGroup = $this->createPendingGroup();
+            $pendingGroup = $this->createPendingGroup($storeId);
         }
 
         return response()->json([
@@ -28,20 +32,22 @@ class TelegramSettingsController extends Controller
         ]);
     }
 
-    public function regenerate()
+    public function regenerate(Request $request)
     {
-        $group = $this->createPendingGroup();
+        $storeId = $request->user()->store_id;
+        $group = $this->createPendingGroup($storeId);
 
         return response()->json([
             'success' => true,
             'message' => 'New verification token generated.',
-            'data' => $this->settingsData($this->linkedGroup(), $group),
+            'data' => $this->settingsData($this->linkedGroup($storeId), $group),
         ]);
     }
 
-    private function linkedGroup(): ?TelegramGroup
+    private function linkedGroup($storeId): ?TelegramGroup
     {
         return TelegramGroup::query()
+            ->where('store_id', $storeId)
             ->where('is_active', true)
             ->where('is_verified', true)
             ->whereNotNull('telegram_chat_id')
@@ -69,9 +75,10 @@ class TelegramSettingsController extends Controller
         ];
     }
 
-    private function createPendingGroup(): TelegramGroup
+    private function createPendingGroup($storeId): TelegramGroup
     {
         return TelegramGroup::create([
+            'store_id' => $storeId,
             'verify_token' => 'CAFE_'.strtoupper(Str::random(32)),
             'is_verified' => false,
             'is_active' => true,

@@ -12,10 +12,11 @@ class EnsureAdmin
     {
         $user = $request->user();
 
-        if (!$user || !$user->is_admin || !$user->is_active) {
+        // Check if user exists and is either a Super Admin or a Store Owner
+        if (!$user || (!$user->is_admin && $user->role !== 'store_owner') || !$user->is_active) {
             return response()->json([
-                'message' => 'You are not authorized to access this resource.',
-            ], Response::HTTP_FORBIDDEN);
+                'message' => 'You are not authorized to access this resource.'
+            ], 403);
         }
 
         return $next($request);
