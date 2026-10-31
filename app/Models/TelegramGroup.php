@@ -2,11 +2,15 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class TelegramGroup extends Model
 {
+    use BelongsToStore;
+
     protected $fillable = [
+        'store_id',
         'telegram_chat_id',
         'title',
         'group_name',
