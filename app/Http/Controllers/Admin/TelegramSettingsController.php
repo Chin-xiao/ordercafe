@@ -13,7 +13,7 @@ class TelegramSettingsController extends Controller
     {
         $user = $request->user();
 
-        // If logged in as SuperAdmin and store_id is null, fall back to store 1 (or handle globally)
+        // Fallback to store 1 if logged in as Super Admin with a null store_id
         $storeId = $user->store_id ?? 1;
 
         $linkedGroup = $this->linkedGroup($storeId);
@@ -40,11 +40,22 @@ class TelegramSettingsController extends Controller
         $user = $request->user();
         $storeId = $user->store_id ?? 1;
 
+        // Unlink/clear the chat_id and status of the old group so it disconnects cleanly
+        TelegramGroup::query()
+            ->where('store_id', $storeId)
+            ->where('is_verified', true)
+            ->update([
+                'telegram_chat_id' => null,
+                'is_verified' => false,
+                'is_active' => false,
+            ]);
+
+        // Generate a new pending group token
         $group = $this->createPendingGroup($storeId);
 
         return response()->json([
             'success' => true,
-            'message' => 'New verification token generated.',
+            'message' => 'Previous group unlinked and new verification token generated.',
             'data' => $this->settingsData($this->linkedGroup($storeId), $group),
         ]);
     }
