@@ -6,6 +6,7 @@ use App\Models\OrderItem;
 use App\Models\OrderSession;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 class ReportService
@@ -24,9 +25,9 @@ class ReportService
             $query->whereDate('created_at', '<=', $dateTo);
         }
 
-        $totalRevenue = $query->sum('total_amount');
-        $totalOrders = $query->count();
-        $uniqueCustomers = $query->distinct('user_id')->count('user_id');
+        $totalRevenue = (clone $query)->sum('total_amount');
+        $totalOrders = (clone $query)->count();
+        $uniqueCustomers = (clone $query)->distinct('user_id')->count('user_id');
 
         // Group revenue by day for charts
         $dailySales = (clone $query)
@@ -56,6 +57,11 @@ class ReportService
             ->join('orders', 'order_items.order_id', '=', 'orders.id')
             ->where('orders.status', 'submitted');
 
+        $user = Auth::user();
+        if ($user && $user->role === 'store_owner' && $user->store_id) {
+            $query->where('orders.store_id', $user->store_id);
+        }
+
         if ($dateFrom) {
             $query->whereDate('orders.created_at', '>=', $dateFrom);
         }
@@ -71,7 +77,8 @@ class ReportService
             ->groupBy('order_items.product_name')
             ->orderByDesc('total_quantity')
             ->limit(10)
-            ->get();
+            ->get()
+            ->toArray();
     }
 
     /**

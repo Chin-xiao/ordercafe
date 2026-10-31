@@ -23,8 +23,13 @@ trait BelongsToStore
         static::addGlobalScope('store', function (Builder $builder) {
             $user = Auth::user();
 
-            if ($user && $user->role === 'store_owner' && $user->store_id) {
-                $builder->where($builder->getModel()->getTable() . '.store_id', $user->store_id);
+            if ($user && $user->role === 'store_owner') {
+                if ($user->store_id) {
+                    $builder->where($builder->getModel()->getTable() . '.store_id', $user->store_id);
+                } else {
+                    // Fail-safe: if store_owner has no store_id, ensure they see 0 records instead of global data
+                    $builder->whereRaw('1 = 0');
+                }
             }
             // Super admins have no scope restrictions and can view all data globally
         });

@@ -34,7 +34,15 @@ class CustomerController extends Controller
             $query->where('is_active', true);
         }
 
-        if (! ($validated['include_without_orders'] ?? false)) {
+        $user = $request->user();
+        if ($user && $user->role === 'store_owner' && $user->store_id) {
+            $query->whereHas('orders', function ($orders) use ($filters, $validated, $user) {
+                $orders->where('store_id', $user->store_id);
+                if (! ($validated['include_without_orders'] ?? false)) {
+                    $this->applyDateRange($orders, $filters['from'], $filters['to_exclusive']);
+                }
+            });
+        } elseif (! ($validated['include_without_orders'] ?? false)) {
             $query->whereHas('orders', fn ($orders) => $this->applyDateRange(
                 $orders,
                 $filters['from'],
