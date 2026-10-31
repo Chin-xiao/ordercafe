@@ -13,9 +13,8 @@ class TelegramSettingsController extends Controller
     {
         $user = $request->user();
 
-        // If super admin doesn't have a store_id, handle it gracefully
-        // (e.g., fallback to store_id = 1 or handle globally if needed)
-        $storeId = $user->store_id ?? 1; // Adjust fallback as needed
+        // If logged in as SuperAdmin and store_id is null, fall back to store 1 (or handle globally)
+        $storeId = $user->store_id ?? 1;
 
         $linkedGroup = $this->linkedGroup($storeId);
         $pendingGroup = TelegramGroup::query()
