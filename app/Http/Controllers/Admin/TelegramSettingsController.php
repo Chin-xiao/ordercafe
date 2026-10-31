@@ -9,9 +9,13 @@ use Illuminate\Support\Str;
 
 class TelegramSettingsController extends Controller
 {
-    public function show(Request $request)
+   public function show(Request $request)
     {
-        $storeId = $request->user()->store_id;
+        $user = $request->user();
+
+        // If super admin doesn't have a store_id, handle it gracefully
+        // (e.g., fallback to store_id = 1 or handle globally if needed)
+        $storeId = $user->store_id ?? 1; // Adjust fallback as needed
 
         $linkedGroup = $this->linkedGroup($storeId);
         $pendingGroup = TelegramGroup::query()
@@ -34,7 +38,9 @@ class TelegramSettingsController extends Controller
 
     public function regenerate(Request $request)
     {
-        $storeId = $request->user()->store_id;
+        $user = $request->user();
+        $storeId = $user->store_id ?? 1;
+
         $group = $this->createPendingGroup($storeId);
 
         return response()->json([
