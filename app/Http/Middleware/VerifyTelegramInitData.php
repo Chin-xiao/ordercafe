@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\OrderSession;
 use App\Services\TelegramCustomerIdentity;
 use Closure;
 use Illuminate\Http\Request;
@@ -41,6 +42,13 @@ class VerifyTelegramInitData
         $startParam = $validatedData['start_param'];
         if (is_string($startParam) && preg_match('/^order_([1-9][0-9]*)$/D', $startParam, $matches)) {
             $startParam = $matches[1];
+            $storeId = OrderSession::query()
+                ->whereKey((int) $startParam)
+                ->value('store_id');
+
+            if ($storeId !== null) {
+                $request->attributes->set('telegram_web_app_store_id', (int) $storeId);
+            }
         }
         $request->attributes->set('telegram_web_app_start_param', $startParam);
 

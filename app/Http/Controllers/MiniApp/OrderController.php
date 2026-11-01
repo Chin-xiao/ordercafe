@@ -22,7 +22,9 @@ class OrderController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $storeId = optional($request->user())->store_id ?? 1;
+        $storeId = $request->attributes->get('telegram_web_app_store_id')
+            ?? optional($request->user())->store_id
+            ?? 1;
         $validated = $request->validate([
             'order_session_id' => ['required', 'integer'],
             'items' => ['required', 'array', 'min:1'],
@@ -80,7 +82,9 @@ class OrderController extends Controller
 
     public function myOrder(Request $request): JsonResponse
     {
-        $storeId = optional($request->user())->store_id ?? 1;
+        $storeId = $request->attributes->get('telegram_web_app_store_id')
+            ?? optional($request->user())->store_id
+            ?? 1;
         $session = OrderSession::query()
             ->where('store_id', $storeId)
             ->where('status', 'open')

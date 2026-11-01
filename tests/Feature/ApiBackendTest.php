@@ -567,6 +567,56 @@ class ApiBackendTest extends TestCase
         ])->assertOk()->assertJsonPath('data', null);
     }
 
+    public function test_mini_app_uses_the_linked_sessions_store_for_non_default_store(): void
+    {
+        $botToken = 'test-bot-token';
+        config(['services.telegram.bot_token' => $botToken]);
+        $store = Store::create([
+            'name' => 'Second Store',
+            'slug' => 'second-store',
+        ]);
+        $admin = User::factory()->create(['is_admin' => true]);
+        $session = OrderSession::create([
+            'store_id' => $store->id,
+            'order_number' => 'SESSION-STORE-LINK',
+            'title' => 'Second Store Session',
+            'status' => 'open',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $product = Product::create([
+            'store_id' => $store->id,
+            'name' => 'Second Store Coffee',
+            'price' => '3.50',
+            'is_available' => true,
+        ]);
+        $initData = $this->signedInitData($botToken, [
+            'auth_date' => (string) time(),
+            'start_param' => 'order_'.$session->id,
+            'user' => json_encode(['id' => 7654321], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->getJson('/api/mini-app/order-session/current', [
+            'X-Telegram-Init-Data' => $initData,
+        ])->assertOk()
+            ->assertJsonPath('data.id', $session->id)
+            ->assertJsonPath('data.store_id', $store->id)
+            ->assertJsonPath('data.ordering_allowed', true);
+
+        $this->getJson('/api/mini-app/products', [
+            'X-Telegram-Init-Data' => $initData,
+        ])->assertOk()
+            ->assertJsonPath('data.0.name', 'Second Store Coffee');
+
+        $this->postJson('/api/mini-app/orders', [
+            'order_session_id' => $session->id,
+            'items' => [['product_id' => $product->id, 'quantity' => 1]],
+        ], ['X-Telegram-Init-Data' => $initData])->assertCreated()
+            ->assertJsonPath('data.store_id', $store->id)
+            ->assertJsonPath('data.order_session_id', $session->id);
+    }
+
     public function test_mini_app_cannot_submit_an_order_for_a_different_session_than_signed_start_param(): void
     {
         $botToken = 'test-bot-token';

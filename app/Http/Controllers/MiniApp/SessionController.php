@@ -12,7 +12,9 @@ class SessionController extends Controller
     public function current(Request $request)
     {
         $now = Carbon::now('UTC');
-        $storeId = optional($request->user())->store_id ?? 1;
+        $storeId = $request->attributes->get('telegram_web_app_store_id')
+            ?? optional($request->user())->store_id
+            ?? 1;
         $startParam = $request->attributes->get('telegram_web_app_start_param');
 
         $session = null;

@@ -15,7 +15,7 @@ class ProductController extends Controller
     public function index(Request $request)
     {
         // Get store ID safely from the authenticated user context (default to 1 if null)
-        $storeId = optional($request->user())->store_id ?? 1;
+        $storeId = $this->storeId($request);
 
         $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::PRODUCTS_KEY,
@@ -46,7 +46,7 @@ class ProductController extends Controller
 
     public function categories(Request $request)
     {
-        $storeId = optional($request->user())->store_id ?? 1;
+        $storeId = $this->storeId($request);
 
         $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::CATEGORIES_KEY,
@@ -91,5 +91,12 @@ class ProductController extends Controller
                 ? null
                 : "https://t.me/{$botUsername}?start=order_notifications",
         ];
+    }
+
+    private function storeId(Request $request): int
+    {
+        return $request->attributes->get('telegram_web_app_store_id')
+            ?? optional($request->user())->store_id
+            ?? 1;
     }
 }
