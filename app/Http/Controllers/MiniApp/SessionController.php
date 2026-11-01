@@ -12,32 +12,26 @@ class SessionController extends Controller
     public function current(Request $request)
     {
         $now = Carbon::now('UTC');
-
-        // Determine the current store ID (via authenticated user or request context)
         $storeId = optional($request->user())->store_id;
-
         $startParam = $request->attributes->get('telegram_web_app_start_param');
+
+        $session = null;
+
         if ($startParam !== null) {
             $sessionId = is_string($startParam)
                 ? filter_var($startParam, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
                 : false;
 
-            $session = $sessionId !== false
-                ? OrderSession::query()
+            if ($sessionId !== false) {
+                // Find the exact session requested by the Telegram link
+                $session = OrderSession::query()
                     ->whereKey($sessionId)
-                    // Optional security: ensure session matches the store if storeId is present
                     ->when($storeId, fn ($q) => $q->where('store_id', $storeId))
                     ->with('creator')
-                    ->first()
-                : null;
-
-            if ($session
-                && $session->status === 'open'
-                && (! $session->expires_at || $session->expires_at->lessThanOrEqualTo($now))) {
-                $session->setAttribute('status', 'expired');
+                    ->first();
             }
         } else {
-            // 👇 SCOPE THIS FALLBACK BY STORE_ID SO IT DOESN'T LEAK ACROSS STORES
+            // Fallback only if no startParam was provided, strictly scoped to this store
             $session = OrderSession::query()
                 ->where('status', 'open')
                 ->where('expires_at', '>', $now)
@@ -49,6 +43,11 @@ class SessionController extends Controller
 
         if (! $session) {
             return response()->json(['data' => null]);
+        }
+
+        // Handle expiration check
+        if ($session->status === 'open' && $session->expires_at && $session->expires_at->lessThanOrEqualTo($now)) {
+            $session->setAttribute('status', 'expired');
         }
 
         $data = $session->toArray();
