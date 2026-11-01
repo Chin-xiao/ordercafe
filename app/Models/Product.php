@@ -13,10 +13,24 @@ class Product extends Model
 
     protected static function booted(): void
     {
-        // Cache clearing on product changes
-        static::saved(fn () => MiniAppCatalogCache::forget());
-        static::deleted(fn () => MiniAppCatalogCache::forget());
-        static::restored(fn () => MiniAppCatalogCache::forget());
+        // Cache clearing scoped to the specific store of the product
+        static::saved(function ($product) {
+            if ($product->store_id) {
+                MiniAppCatalogCache::forget($product->store_id);
+            }
+        });
+
+        static::deleted(function ($product) {
+            if ($product->store_id) {
+                MiniAppCatalogCache::forget($product->store_id);
+            }
+        });
+
+        static::restored(function ($product) {
+            if ($product->store_id) {
+                MiniAppCatalogCache::forget($product->store_id);
+            }
+        });
     }
 
     protected $fillable = [

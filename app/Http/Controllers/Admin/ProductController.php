@@ -4,23 +4,42 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Services\MiniAppCatalogCache;
 use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        $query = Product::with('category')
+            ->orderBy('sort_order')
+            ->orderBy('name');
+
+        // Allow Super Admin to filter by a specific store query parameter if needed
+        if ($request->has('store_id') && $request->user()->role === 'super_admin') {
+            $query->where('store_id', $request->input('store_id'));
+        }
+
         return response()->json([
-            'data' => Product::with('category')
-                ->orderBy('sort_order')
-                ->orderBy('name')
-                ->get(),
+            'data' => $query->get(),
         ]);
     }
 
     public function store(Request $request)
     {
-        $product = Product::create($this->validatedData($request));
+        $data = $this->validatedData($request);
+
+        // Assign store_id based on SuperAdmin input or authenticated store owner
+        if ($request->user()->role === 'super_admin' && $request->has('store_id')) {
+            $data['store_id'] = $request->input('store_id');
+        } elseif (empty($data['store_id'])) {
+            $data['store_id'] = $request->user()->store_id ?? 1;
+        }
+
+        $product = Product::create($data);
+
+        // Instantly invalidate/clear the miniapp cache for this store
+        MiniAppCatalogCache::forget($product->store_id);
 
         return response()->json([
             'data' => $product->load('category'),
@@ -34,14 +53,27 @@ class ProductController extends Controller
 
     public function update(Request $request, Product $product)
     {
-        $product->update($this->validatedData($request, partial: true));
+        $data = $this->validatedData($request, partial: true);
+
+        if ($request->user()->role === 'super_admin' && $request->has('store_id')) {
+            $data['store_id'] = $request->input('store_id');
+        }
+
+        $product->update($data);
+
+        // Instantly invalidate/clear the miniapp cache for this store
+        MiniAppCatalogCache::forget($product->store_id);
 
         return response()->json(['data' => $product->refresh()->load('category')]);
     }
 
     public function destroy(Product $product)
     {
+        $storeId = $product->store_id;
         $product->delete();
+
+        // Instantly invalidate/clear the miniapp cache for this store
+        MiniAppCatalogCache::forget($storeId);
 
         return response()->noContent();
     }
@@ -49,6 +81,7 @@ class ProductController extends Controller
     private function validatedData(Request $request, bool $partial = false): array
     {
         $rules = [
+            'store_id' => ['nullable', 'integer', 'exists:stores,id'],
             'category_id' => ['nullable', 'integer', 'exists:categories,id'],
             'name' => ['string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -56,15 +89,14 @@ class ProductController extends Controller
             'image_url' => ['nullable', 'url', 'max:2048'],
             'is_available' => ['boolean'],
             'sort_order' => ['integer'],
-            'requires_sugar' => ['boolean'], // 👈 1. Add this here
+            'requires_sugar' => ['boolean'],
         ];
 
         if (!$partial) {
             $rules['name'][] = 'required';
             $rules['price'][] = 'required';
         } else {
-            // 👈 2. Make sure 'requires_sugar' is included in this array list
-            foreach (['name', 'price', 'category_id', 'description', 'image_url', 'is_available', 'sort_order', 'requires_sugar'] as $field) {
+            foreach (['store_id', 'name', 'price', 'category_id', 'description', 'image_url', 'is_available', 'sort_order', 'requires_sugar'] as $field) {
                 $rules[$field][] = 'sometimes';
             }
         }
