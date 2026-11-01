@@ -14,8 +14,12 @@ class ProductController extends Controller
 {
     public function index(Request $request)
     {
+        // Get store ID safely from the authenticated user context (default to 1 if null)
+        $storeId = optional($request->user())->store_id ?? 1;
+
         $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::PRODUCTS_KEY,
+            $storeId,
             fn () => [
                 'data' => Product::query()
                     ->where('is_available', true)
@@ -38,8 +42,11 @@ class ProductController extends Controller
 
     public function categories(Request $request)
     {
+        $storeId = optional($request->user())->store_id ?? 1;
+
         $catalog = MiniAppCatalogCache::remember(
             MiniAppCatalogCache::CATEGORIES_KEY,
+            $storeId,
             fn () => [
                 'data' => Category::query()
                     ->where('is_active', true)
@@ -59,8 +66,15 @@ class ProductController extends Controller
         return response()->json($catalog);
     }
 
-    private function privateMessagingDetails(User $customer): array
+    private function privateMessagingDetails(?User $customer): array
     {
+        if (!$customer) {
+            return [
+                'activated' => false,
+                'activation_url' => null,
+            ];
+        }
+
         $activated = $customer->telegram_private_chat_id !== null
             && $customer->telegram_private_chat_activated_at !== null;
         $botUsername = ltrim((string) config('services.telegram.bot_username', 'ahseven_bot'), '@');
