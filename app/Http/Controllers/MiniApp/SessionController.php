@@ -50,7 +50,8 @@ class SessionController extends Controller
             $session->setAttribute('status', 'expired');
         }
 
-        $data = $session->toArray();
+       $data = $session->toArray();
+        $data['id'] = (int) $session->id; // Ensure ID is explicitly an integer
         $data['ordering_allowed'] = $session->status === 'open'
             && $session->expires_at
             && $session->expires_at->isFuture();
