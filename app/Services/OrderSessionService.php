@@ -13,9 +13,10 @@ class OrderSessionService
 {
     public function __construct(private TelegramService $telegramService) {}
 
-    public function createSession(User $admin, array $data): OrderSession
+    public function createSession(User $admin, array $data, int $storeId): OrderSession
     {
         return OrderSession::create([
+            'store_id' => $storeId,
             'order_number' => 'SESSION-'.Carbon::now('UTC')->format('Ymd').'-'.str_pad(
                 (string) random_int(1, 999),
                 3,
@@ -35,12 +36,13 @@ class OrderSessionService
     /**
      * @return array{session: OrderSession, notifications: array}
      */
-    public function startSession(OrderSession $session): array
+    public function startSession(OrderSession $session, int $storeId): array
     {
         $this->expireSessions();
 
-        $startedSession = DB::transaction(function () use ($session): OrderSession {
+        $startedSession = DB::transaction(function () use ($session, $storeId): OrderSession {
             $lockedSessions = OrderSession::query()
+                ->where('store_id', $storeId)
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();

@@ -22,8 +22,9 @@ class OrderController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $storeId = optional($request->user())->store_id ?? 1;
         $validated = $request->validate([
-            'order_session_id' => ['required', 'exists:order_sessions,id'],
+            'order_session_id' => ['required', 'integer'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1', 'max:100'],
@@ -34,6 +35,17 @@ class OrderController extends Controller
                 Rule::in(OrderItem::allowedSugarPercentages()),
             ],
         ]);
+
+        $sessionExists = OrderSession::query()
+            ->whereKey($validated['order_session_id'])
+            ->where('store_id', $storeId)
+            ->exists();
+
+        if (! $sessionExists) {
+            throw ValidationException::withMessages([
+                'order_session_id' => ['The selected order session is invalid.'],
+            ]);
+        }
 
         $startParam = $request->attributes->get('telegram_web_app_start_param');
         if ($startParam !== null
@@ -46,6 +58,7 @@ class OrderController extends Controller
         }
 
         $user = $request->user();
+        $validated['store_id'] = $storeId;
 
         $order = $this->orderService->submitOrder($user, $validated);
         $order->loadMissing('session.creator.paymentSetting');
@@ -67,9 +80,15 @@ class OrderController extends Controller
 
     public function myOrder(Request $request): JsonResponse
     {
-        $session = OrderSession::query()->where('status', 'open')->latest('started_at')->first();
+        $storeId = optional($request->user())->store_id ?? 1;
+        $session = OrderSession::query()
+            ->where('store_id', $storeId)
+            ->where('status', 'open')
+            ->latest('started_at')
+            ->first();
         $order = $session
             ? $session->orders()
+                ->where('store_id', $storeId)
                 ->where('user_id', $request->user()->id)
                 ->with(['items', 'session.creator.paymentSetting'])
                 ->first()

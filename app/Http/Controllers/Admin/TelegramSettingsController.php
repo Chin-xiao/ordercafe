@@ -10,11 +10,9 @@ use Illuminate\Support\Str;
 class TelegramSettingsController extends Controller
 {
    public function show(Request $request)
-    {
-        $user = $request->user();
-
-        // Fallback to store 1 if logged in as Super Admin with a null store_id
-        $storeId = $user->store_id ?? 1;
+   {
+       // Fallback to store 1 if logged in as Super Admin with a null store_id
+       $storeId = optional($request->user())->store_id ?? 1;
 
         $linkedGroup = $this->linkedGroup($storeId);
         $pendingGroup = TelegramGroup::query()
@@ -37,8 +35,7 @@ class TelegramSettingsController extends Controller
 
     public function regenerate(Request $request)
     {
-        $user = $request->user();
-        $storeId = $user->store_id ?? 1;
+        $storeId = optional($request->user())->store_id ?? 1;
 
         // Unlink/clear the chat_id and status of the old group so it disconnects cleanly
         TelegramGroup::query()

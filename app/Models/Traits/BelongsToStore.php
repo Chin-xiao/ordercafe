@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Auth;
  * Provides automatic multi-tenant scoping for any model with a `store_id` column.
  *
  * 1. Adds a global scope so store_owners only see their own store's records.
- * 2. Automatically stamps `store_id` when a store_owner creates a record.
+ * 2. Stamps `store_id` from the current user, defaulting non-store-owner contexts to store 1.
  *
  * Usage: `use BelongsToStore;` in your model and ensure `store_id` is in `$fillable`.
  */
@@ -34,12 +34,20 @@ trait BelongsToStore
             // Super admins have no scope restrictions and can view all data globally
         });
 
-        // 2. Automatically stamp the store_id when a store owner creates a new record
+        // 2. Automatically stamp the store_id for new records
         static::creating(function ($model) {
             $user = Auth::user();
 
-            if ($user && $user->role === 'store_owner' && empty($model->store_id) && $user->store_id) {
-                $model->store_id = $user->store_id;
+            if ($user && $user->role === 'store_owner') {
+                if (empty($model->store_id) && $user->store_id) {
+                    $model->store_id = $user->store_id;
+                }
+
+                return;
+            }
+
+            if (empty($model->store_id)) {
+                $model->store_id = $user?->store_id ?? 1;
             }
         });
     }
@@ -52,4 +60,3 @@ trait BelongsToStore
         return $this->belongsTo(Store::class);
     }
 }
-

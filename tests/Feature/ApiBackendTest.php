@@ -8,10 +8,12 @@ use App\Models\OrderItem;
 use App\Models\OrderSession;
 use App\Models\PaymentSetting;
 use App\Models\Product;
+use App\Models\Store;
 use App\Models\TelegramGroup;
 use App\Models\TelegramMessage;
 use App\Models\User;
 use App\Services\MiniAppCatalogCache;
+use App\Services\OrderSessionService;
 use App\Services\TelegramService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -501,6 +503,24 @@ class ApiBackendTest extends TestCase
         Cache::store('file')->forget(MiniAppCatalogCache::CATEGORIES_KEY);
     }
 
+    public function test_category_changes_only_invalidate_the_matching_store_catalog_cache(): void
+    {
+        $storeOneKey = MiniAppCatalogCache::CATEGORIES_KEY.':store:1';
+        $storeTwoKey = MiniAppCatalogCache::CATEGORIES_KEY.':store:2';
+        Cache::store('file')->put($storeOneKey, 'store one', now()->addMinute());
+        Cache::store('file')->put($storeTwoKey, 'store two', now()->addMinute());
+
+        Category::create([
+            'store_id' => 1,
+            'name' => 'Store One Category',
+        ]);
+
+        $this->assertFalse(Cache::store('file')->has($storeOneKey));
+        $this->assertSame('store two', Cache::store('file')->get($storeTwoKey));
+
+        Cache::store('file')->forget($storeTwoKey);
+    }
+
     public function test_mini_app_rejects_expired_or_unsigned_init_data(): void
     {
         config(['services.telegram.bot_token' => 'test-bot-token']);
@@ -695,6 +715,51 @@ class ApiBackendTest extends TestCase
         }
 
         $this->assertDatabaseCount('orders', 0);
+    }
+
+    public function test_order_sessions_can_be_open_concurrently_in_different_stores(): void
+    {
+        Store::create([
+            'name' => 'Store Two',
+            'slug' => 'store-two',
+        ]);
+        $admin = User::factory()->create(['is_admin' => true]);
+        $firstSession = OrderSession::create([
+            'store_id' => 1,
+            'order_number' => 'SESSION-STORE-ONE',
+            'title' => 'Store One Session',
+            'status' => 'draft',
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+        $secondSession = OrderSession::create([
+            'store_id' => 2,
+            'order_number' => 'SESSION-STORE-TWO',
+            'title' => 'Store Two Session',
+            'status' => 'draft',
+            'expires_at' => now()->addHour(),
+            'created_by' => $admin->id,
+        ]);
+
+        $telegramService = $this->createMock(TelegramService::class);
+        $telegramService->expects($this->exactly(2))
+            ->method('sendOrderStartedNotification')
+            ->willReturn([]);
+        $sessionService = new OrderSessionService($telegramService);
+
+        $sessionService->startSession($firstSession, 1);
+        $sessionService->startSession($secondSession, 2);
+
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $firstSession->id,
+            'store_id' => 1,
+            'status' => 'open',
+        ]);
+        $this->assertDatabaseHas('order_sessions', [
+            'id' => $secondSession->id,
+            'store_id' => 2,
+            'status' => 'open',
+        ]);
     }
 
     public function test_cors_allows_the_configured_render_frontend_origin(): void

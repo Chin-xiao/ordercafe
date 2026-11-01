@@ -33,7 +33,7 @@ class ProductController extends Controller
         if ($request->user()->role === 'super_admin' && $request->has('store_id')) {
             $data['store_id'] = $request->input('store_id');
         } elseif (empty($data['store_id'])) {
-            $data['store_id'] = $request->user()->store_id ?? 1;
+            $data['store_id'] = optional($request->user())->store_id ?? 1;
         }
 
         $product = Product::create($data);

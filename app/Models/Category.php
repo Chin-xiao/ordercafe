@@ -12,9 +12,23 @@ class Category extends Model
 
     protected static function booted(): void
     {
-        // Cache clearing on category changes
-        static::saved(fn () => MiniAppCatalogCache::forget());
-        static::deleted(fn () => MiniAppCatalogCache::forget());
+        static::saved(function ($category): void {
+            if ($category->store_id) {
+                MiniAppCatalogCache::forget($category->store_id);
+            }
+        });
+
+        static::deleted(function ($category): void {
+            if ($category->store_id) {
+                MiniAppCatalogCache::forget($category->store_id);
+            }
+        });
+
+        static::registerModelEvent('restored', function ($category): void {
+            if ($category->store_id) {
+                MiniAppCatalogCache::forget($category->store_id);
+            }
+        });
     }
 
     protected $fillable = [

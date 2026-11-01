@@ -32,6 +32,7 @@ class OrderService
         $order = DB::transaction(function () use ($user, $data, &$sessionExpired) {
             // 1. Find and lock the order session to prevent race conditions
             $session = OrderSession::where('id', $data['order_session_id'])
+                ->where('store_id', $data['store_id'])
                 ->lockForUpdate()
                 ->first();
 
@@ -57,6 +58,7 @@ class OrderService
 
             // 4. Verify user doesn't already have an order in this session (Enforces unique constraint)
             $existingOrder = Order::where('order_session_id', $session->id)
+                ->where('store_id', $session->store_id)
                 ->where('user_id', $user->id)
                 ->first();
 
@@ -71,6 +73,7 @@ class OrderService
 
             // 6. Create the parent order record
             $order = Order::create([
+                'store_id' => $session->store_id,
                 'order_number' => $orderNumber,
                 'order_session_id' => $session->id,
                 'user_id' => $user->id,
@@ -85,6 +88,7 @@ class OrderService
             // Extract all product IDs to query in bulk
             $productIds = collect($itemsData)->pluck('product_id');
             $products = Product::whereIn('id', $productIds)
+                ->where('store_id', $session->store_id)
                 ->where('is_available', true)
                 ->get(['id', 'name', 'price'])
                 ->keyBy('id');

@@ -12,7 +12,7 @@ class SessionController extends Controller
     public function current(Request $request)
     {
         $now = Carbon::now('UTC');
-        $storeId = optional($request->user())->store_id;
+        $storeId = optional($request->user())->store_id ?? 1;
         $startParam = $request->attributes->get('telegram_web_app_start_param');
 
         $session = null;
@@ -26,7 +26,7 @@ class SessionController extends Controller
                 // Find the exact session requested by the Telegram link
                 $session = OrderSession::query()
                     ->whereKey($sessionId)
-                    ->when($storeId, fn ($q) => $q->where('store_id', $storeId))
+                    ->where('store_id', $storeId)
                     ->with('creator')
                     ->first();
             }
@@ -35,7 +35,7 @@ class SessionController extends Controller
             $session = OrderSession::query()
                 ->where('status', 'open')
                 ->where('expires_at', '>', $now)
-                ->when($storeId, fn ($q) => $q->where('store_id', $storeId))
+                ->where('store_id', $storeId)
                 ->with('creator')
                 ->latest('started_at')
                 ->first();

@@ -73,7 +73,8 @@ class OrderSessionController extends Controller
             }
         }
 
-        $session = $this->sessionService->createSession($request->user(), $validated);
+        $storeId = optional($request->user())->store_id ?? 1;
+        $session = $this->sessionService->createSession($request->user(), $validated, $storeId);
 
         return response()->json([
             'message' => 'Order session created successfully as draft.',
@@ -133,10 +134,12 @@ class OrderSessionController extends Controller
         ], $failed ? 502 : 200);
     }
 
-    public function start(OrderSession $orderSession)
+    public function start(Request $request, OrderSession $orderSession)
     {
+        $storeId = optional($request->user())->store_id ?? 1;
+
         try {
-            $result = $this->sessionService->startSession($orderSession);
+            $result = $this->sessionService->startSession($orderSession, $storeId);
         } catch (TelegramDeliveryException $exception) {
             return response()->json([
                 'message' => 'The session started, but the Telegram announcement could not be delivered.',

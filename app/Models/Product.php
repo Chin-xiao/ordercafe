@@ -13,6 +13,14 @@ class Product extends Model
 
     protected static function booted(): void
     {
+        static::updating(function ($product): void {
+            $previousStoreId = $product->getOriginal('store_id');
+
+            if ($product->isDirty('store_id') && $previousStoreId) {
+                MiniAppCatalogCache::forget($previousStoreId);
+            }
+        });
+
         // Cache clearing scoped to the specific store of the product
         static::saved(function ($product) {
             if ($product->store_id) {

@@ -22,12 +22,16 @@ class ProductController extends Controller
             $storeId,
             fn () => [
                 'data' => Product::query()
+                    ->where('store_id', $storeId)
                     ->where('is_available', true)
-                    ->where(function ($query) {
+                    ->where(function ($query) use ($storeId) {
                         $query->whereNull('category_id')
-                            ->orWhereHas('category', fn ($categoryQuery) => $categoryQuery->where('is_active', true));
+                            ->orWhereHas('category', fn ($categoryQuery) => $categoryQuery
+                                ->where('store_id', $storeId)
+                                ->where('is_active', true));
                     })
-                    ->with('category')
+                    ->with(['category' => fn ($categoryQuery) => $categoryQuery
+                        ->where('store_id', $storeId)])
                     ->orderBy('sort_order')
                     ->orderBy('name')
                     ->get()
@@ -49,8 +53,10 @@ class ProductController extends Controller
             $storeId,
             fn () => [
                 'data' => Category::query()
+                    ->where('store_id', $storeId)
                     ->where('is_active', true)
                     ->with(['products' => fn ($query) => $query
+                        ->where('store_id', $storeId)
                         ->where('is_available', true)
                         ->orderBy('sort_order')
                         ->orderBy('name')])
