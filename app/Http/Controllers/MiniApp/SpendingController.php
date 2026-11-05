@@ -12,17 +12,15 @@ class SpendingController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $storeId = $user->store_id ?? 1; // Strict store isolation
+        $storeId = $user->store_id ?? 1;
         $range = $request->query('range', 'month');
         $now = Carbon::now();
 
-        // 1. Base query: Get successful orders for this specific customer and store
         $query = Order::with('items.product.category')
             ->where('user_id', $user->id)
             ->where('store_id', $storeId)
-            ->where('status', '!=', 'cancelled'); // "Cancelled orders are not counted"
+            ->where('status', '!=', 'cancelled');
 
-        // 2. Filter by requested date range
         if ($range === 'week') {
             $query->where('created_at', '>=', $now->copy()->startOfWeek());
         } elseif ($range === 'month') {
@@ -31,12 +29,11 @@ class SpendingController extends Controller
 
         $orders = $query->get();
 
-        // 3. Initialize data structures
         $dailyTotals = [];
         $categoryTotals = [];
         $itemCounts = [];
+        $grandTotal = 0;
 
-        // Pre-fill daily chart so days with 0 spend still show up on the graph
         if ($range === 'week') {
             for ($i = 0; $i < 7; $i++) {
                 $d = $now->copy()->startOfWeek()->addDays($i);
@@ -49,34 +46,36 @@ class SpendingController extends Controller
             }
         }
 
-        // 4. Aggregate the data
         foreach ($orders as $order) {
             $dateKey = $order->created_at->format('Y-m-d');
 
-            // Daily Chart
+            // Fallback chain for the order's total amount column
+            $orderTotal = (float) ($order->total_price ?? $order->total ?? $order->amount ?? 0);
+            $grandTotal += $orderTotal;
+
             if (isset($dailyTotals[$dateKey])) {
-                $dailyTotals[$dateKey]['total'] += (float) $order->total_price;
+                $dailyTotals[$dateKey]['total'] += $orderTotal;
             } else {
                 $dailyTotals[$dateKey] = [
                     'label' => $order->created_at->format('M d'),
-                    'total' => (float) $order->total_price
+                    'total' => $orderTotal
                 ];
             }
 
-            // Iterate items for Category & Top Item breakdown
             foreach ($order->items as $item) {
-                // Top Items
                 $itemName = $item->product_name ?? optional($item->product)->name ?? 'Unknown Drink';
                 $itemCounts[$itemName] = ($itemCounts[$itemName] ?? 0) + $item->quantity;
 
-                // Categories
                 $catName = optional(optional($item->product)->category)->name ?? 'Uncategorized';
-                $lineTotal = (float) $item->price * $item->quantity;
+
+                // Fallback chain for the item's price column
+                $itemPrice = (float) ($item->price ?? $item->unit_price ?? optional($item->product)->price ?? 0);
+                $lineTotal = $itemPrice * $item->quantity;
+
                 $categoryTotals[$catName] = ($categoryTotals[$catName] ?? 0) + $lineTotal;
             }
         }
 
-        // 5. Format arrays and sort them
         $topItems = collect($itemCounts)
             ->map(fn($qty, $name) => ['name' => $name, 'quantity' => $qty])
             ->sortByDesc('quantity')->take(5)->values();
@@ -85,12 +84,11 @@ class SpendingController extends Controller
             ->map(fn($tot, $name) => ['name' => $name, 'total' => $tot])
             ->sortByDesc('total')->values();
 
-        // Ensure chart is ordered by date
         ksort($dailyTotals);
 
         return response()->json([
             'data' => [
-                'total' => $orders->sum('total_price'),
+                'total' => $grandTotal,
                 'orders_count' => $orders->count(),
                 'daily' => array_values($dailyTotals),
                 'by_category' => $byCategory,
