@@ -13,7 +13,9 @@ use App\Http\Controllers\Api\SuperAdmin\StoreController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\MiniApp\OrderController;
 use App\Http\Controllers\MiniApp\ProductController as MiniAppProductController;
+use App\Http\Controllers\MiniApp\ProfileController;
 use App\Http\Controllers\MiniApp\SessionController;
+use App\Http\Controllers\MiniApp\SpendingController;
 use App\Http\Controllers\TelegramWebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -36,6 +38,10 @@ Route::prefix('mini-app')->middleware(['telegram.mini.app'])->group(function () 
 
     Route::post('/orders', [OrderController::class, 'store']);
     Route::get('/my-order', [OrderController::class, 'myOrder']);
+
+    // Spending and Profile Routes
+    Route::get('/spending', [SpendingController::class, 'index']);
+    Route::get('/profile', [ProfileController::class, 'show']);
 
 });
 
