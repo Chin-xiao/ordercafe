@@ -115,4 +115,5 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Super Admin Store routes
     Route::get('/super-admin/stores', [StoreController::class, 'index']);
     Route::post('/super-admin/stores', [StoreController::class, 'store']);
+    Route::patch('/super-admin/stores/{store}', [StoreController::class, 'update']);
 });

@@ -59,16 +59,6 @@ class StoreController extends Controller
                 'auto_seed_categories' => $autoSeedCategories,
             ]);
 
-            // 2. Create the Store Owner user account
-            User::create([
-                'name' => $request->owner_name,
-                'email' => $request->owner_email,
-                'password' => Hash::make($request->owner_password),
-                'role' => 'store_owner',
-                'store_id' => $store->id,
-            ]);
-
-            // 3. Auto-seed default categories if enabled
             if ($autoSeedCategories) {
                 Category::create([
                     'name' => 'Drink',
@@ -85,6 +75,15 @@ class StoreController extends Controller
                 ]);
             }
 
+            // Create the Store Owner user account
+            User::create([
+                'name' => $request->owner_name,
+                'email' => $request->owner_email,
+                'password' => Hash::make($request->owner_password),
+                'role' => 'store_owner',
+                'store_id' => $store->id,
+            ]);
+
             return $store;
         });
 
@@ -95,5 +94,19 @@ class StoreController extends Controller
                 : 'Store system created successfully with an empty catalog!',
             'data' => $store->load(['categories', 'users'])
         ], 201);
+    }
+
+    public function update(Request $request, Store $store)
+    {
+        $validated = $request->validate([
+            'auto_seed_categories' => 'required|boolean',
+        ]);
+
+        $store->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'data' => $store->refresh(),
+        ]);
     }
 }
