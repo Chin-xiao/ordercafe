@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SuperAdmin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Category;
 use App\Models\Store;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -15,7 +16,7 @@ class StoreController extends Controller
     // List all stores with counts
     public function index()
     {
-        $stores = Store::withCount(['products', 'orderSessions', 'orders'])
+        $stores = Store::withCount(['products', 'categories', 'orderSessions', 'orders'])
             ->with('users')
             ->latest()
             ->get();
@@ -26,7 +27,7 @@ class StoreController extends Controller
         ]);
     }
 
-    // Create a new store and its owner account (starts completely empty)
+    // Create a new store and its owner account (optionally auto-seeds default categories)
     public function store(Request $request)
     {
         $request->validate([
@@ -35,6 +36,7 @@ class StoreController extends Controller
             'owner_name' => 'required|string|max:255',
             'owner_email' => 'required|email|unique:users,email',
             'owner_password' => 'required|string|min:6',
+            'auto_seed_categories' => 'nullable|boolean',
         ]);
 
         $slug = $request->slug ? Str::slug($request->slug) : Str::slug($request->name);
@@ -46,12 +48,15 @@ class StoreController extends Controller
             $slug = $originalSlug . '-' . $counter++;
         }
 
-        $store = DB::transaction(function () use ($request, $slug) {
-            // 1. Create the Store (Products and Categories remain empty)
+        $autoSeedCategories = $request->boolean('auto_seed_categories', true);
+
+        $store = DB::transaction(function () use ($request, $slug, $autoSeedCategories) {
+            // 1. Create the Store
             $store = Store::create([
                 'name' => $request->name,
                 'slug' => $slug,
                 'is_active' => true,
+                'auto_seed_categories' => $autoSeedCategories,
             ]);
 
             // 2. Create the Store Owner user account
@@ -63,13 +68,32 @@ class StoreController extends Controller
                 'store_id' => $store->id,
             ]);
 
+            // 3. Auto-seed default categories if enabled
+            if ($autoSeedCategories) {
+                Category::create([
+                    'name' => 'Drink',
+                    'store_id' => $store->id,
+                    'is_active' => true,
+                    'sort_order' => 1,
+                ]);
+
+                Category::create([
+                    'name' => 'Snacks',
+                    'store_id' => $store->id,
+                    'is_active' => true,
+                    'sort_order' => 2,
+                ]);
+            }
+
             return $store;
         });
 
         return response()->json([
             'success' => true,
-            'message' => 'Store system created successfully with an empty catalog!',
-            'data' => $store
+            'message' => $autoSeedCategories
+                ? 'Store system created successfully with default categories (Drink & Snacks)!'
+                : 'Store system created successfully with an empty catalog!',
+            'data' => $store->load(['categories', 'users'])
         ], 201);
     }
 }

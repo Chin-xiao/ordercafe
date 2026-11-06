@@ -13,6 +13,12 @@ class Store extends Model
         'name',
         'slug',
         'is_active',
+        'auto_seed_categories',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+        'auto_seed_categories' => 'boolean',
     ];
 
     // Relationships
