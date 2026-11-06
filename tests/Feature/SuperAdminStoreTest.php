@@ -6,6 +6,7 @@ use App\Models\Category;
 use App\Models\Store;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Auth;
 use Tests\TestCase;
 
 class SuperAdminStoreTest extends TestCase
@@ -46,6 +47,20 @@ class SuperAdminStoreTest extends TestCase
             'is_active' => true,
             'sort_order' => 2,
         ]);
+
+        $storeOwner = User::where('email', 'owner@example.com')->firstOrFail();
+        $this->assertEquals($storeId, $storeOwner->store_id);
+        $ownerHeaders = [
+            'Authorization' => 'Bearer '.$storeOwner->createToken('test-store-owner')->plainTextToken,
+            'Accept' => 'application/json',
+        ];
+
+        Auth::forgetGuards();
+        $this->getJson('/api/admin/categories', $ownerHeaders)
+            ->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.name', 'Drink')
+            ->assertJsonPath('data.1.name', 'Snacks');
     }
 
     public function test_super_admin_can_create_a_store_without_default_categories(): void

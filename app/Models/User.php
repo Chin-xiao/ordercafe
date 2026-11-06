@@ -26,6 +26,7 @@ class User extends Authenticatable
         'last_name',
         'phone',
         'role',
+        'store_id',
         'is_active',
         'is_admin',
     ];

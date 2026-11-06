@@ -86,15 +86,41 @@ class ApiBackendTest extends TestCase
 
     public function test_admin_category_choices_include_drink_and_snacks(): void
     {
-        $admin = User::factory()->create(['is_admin' => true]);
+        $store = Store::create([
+            'name' => 'Category Store',
+            'slug' => 'category-store',
+        ]);
+        $otherStore = Store::create([
+            'name' => 'Other Category Store',
+            'slug' => 'other-category-store',
+        ]);
+        Category::create([
+            'store_id' => $store->id,
+            'name' => 'Drink',
+        ]);
+        Category::create([
+            'store_id' => $store->id,
+            'name' => 'Snacks',
+        ]);
+        Category::create([
+            'store_id' => $otherStore->id,
+            'name' => 'Private Category',
+        ]);
+
+        $admin = User::factory()->create([
+            'role' => 'store_owner',
+            'store_id' => $store->id,
+        ]);
         $headers = [
             'Authorization' => 'Bearer '.$admin->createToken('test-admin')->plainTextToken,
         ];
 
         $this->getJson('/api/admin/categories', $headers)
             ->assertOk()
+            ->assertJsonCount(2, 'data')
             ->assertJsonFragment(['name' => 'Drink'])
-            ->assertJsonFragment(['name' => 'Snacks']);
+            ->assertJsonFragment(['name' => 'Snacks'])
+            ->assertJsonMissing(['name' => 'Private Category']);
     }
 
     public function test_super_admin_can_upload_a_payment_qr_for_an_admin_account(): void
