@@ -339,19 +339,25 @@ class TelegramService
             throw new TelegramDeliveryException('The Telegram bot token is not configured.');
         }
 
-        $groups = TelegramGroup::query()
+        // ✅ SCOPED TO THE CORRECT STORE ✅
+        $query = TelegramGroup::query()
             ->where('is_active', true)
             ->where('is_verified', true)
-            ->whereNotNull('telegram_chat_id')
-            ->orderByDesc('id')
-            ->limit(1)
-            ->get();
+            ->whereNotNull('telegram_chat_id');
+
+        // Ensure we only fetch the group for this specific session's store
+        if ($session) {
+            $query->where('store_id', $session->store_id);
+        }
+
+        $groups = $query->get();
 
         if ($groups->isEmpty()) {
-            Log::warning('Telegram notification skipped: no active verified groups are configured.', [
+            Log::warning('Telegram notification skipped: no active verified groups are configured for this store.', [
                 'session_id' => $session?->id,
+                'store_id' => $session?->store_id,
             ]);
-            throw new TelegramDeliveryException('No active verified Telegram group is configured.');
+            throw new TelegramDeliveryException('No active verified Telegram group is configured for this store.');
         }
 
         return $groups;
