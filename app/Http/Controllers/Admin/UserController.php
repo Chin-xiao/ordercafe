@@ -75,7 +75,7 @@ class UserController extends Controller
             403,
             'Only super admins can manage payment QR images.'
         );
-        abort_unless($user->is_admin, 404, 'User is not an admin.');
+        abort_unless($user->is_admin || $user->role === 'store_owner', 404, 'User is not an admin or store owner.');
 
         $validated = $request->validate([
             'payment_qr_url' => ['required', 'string', 'url', 'max:1000'],
@@ -107,7 +107,7 @@ class UserController extends Controller
             403,
             'Only super admins can manage payment links.'
         );
-        abort_unless($user->is_admin, 404, 'User is not an admin.');
+        abort_unless($user->is_admin || $user->role === 'store_owner', 404, 'User is not an admin or store owner.');
 
         $validated = $request->validate([
             'payment_link' => ['present', 'nullable', 'string', 'url', 'max:1000'],
