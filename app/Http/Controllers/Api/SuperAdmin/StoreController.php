@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Store;
 use App\Models\User;
+use Illuminate\Http\JsonResponse; // 👈 Added this import
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -107,6 +108,40 @@ class StoreController extends Controller
         return response()->json([
             'success' => true,
             'data' => $store->refresh(),
+        ]);
+    }
+
+    // 👈 Added the uploadPaymentQr method here
+    public function uploadPaymentQr(Request $request, User $user): JsonResponse
+    {
+        abort_unless(
+            $request->user()?->role === 'superadmin',
+            403,
+            'Only super admins can manage payment QR images.'
+        );
+
+        abort_unless($user->role === 'store_owner' || $user->is_admin, 404, 'User is not a store owner or admin.');
+
+        $validated = $request->validate([
+            'payment_qr_url' => ['required', 'string', 'url', 'max:1000'],
+            'payment_link' => ['required', 'string', 'url', 'max:1000'],
+        ]);
+
+        $setting = $user->paymentSetting()->updateOrCreate(
+            ['user_id' => $user->id],
+            [
+                'qr_image_url' => $validated['payment_qr_url'],
+                'payment_link' => $validated['payment_link']
+            ]
+        );
+
+        return response()->json([
+            'message' => 'Payment QR and link updated successfully.',
+            'data' => [
+                'user_id' => $user->id,
+                'payment_qr_image_url' => $setting->qr_image_url,
+                'payment_link' => $setting->payment_link,
+            ],
         ]);
     }
 }
