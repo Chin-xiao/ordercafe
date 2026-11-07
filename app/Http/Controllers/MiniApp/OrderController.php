@@ -5,6 +5,7 @@ namespace App\Http\Controllers\MiniApp;
 use App\Http\Controllers\Controller;
 use App\Models\OrderItem;
 use App\Models\OrderSession;
+use App\Models\PaymentSetting;
 use App\Services\OrderService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -65,8 +66,9 @@ class OrderController extends Controller
         $order = $this->orderService->submitOrder($user, $validated);
         $order->loadMissing('session.creator.paymentSetting');
 
-        $creator = $order->session?->creator;
-        $paymentSetting = $creator?->paymentSetting;
+        $paymentSetting = PaymentSetting::whereHas('user', function ($query) use ($storeId) {
+            $query->where('store_id', $storeId);
+        })->first() ?? $order->session?->creator?->paymentSetting;
         $paymentQrImageUrl = $paymentSetting?->qr_image_url;
         $paymentLink = $paymentSetting?->payment_link;
 
@@ -98,7 +100,9 @@ class OrderController extends Controller
                 ->first()
             : null;
 
-        $paymentSetting = $order?->session?->creator?->paymentSetting;
+        $paymentSetting = PaymentSetting::whereHas('user', function ($query) use ($storeId) {
+            $query->where('store_id', $storeId);
+        })->first() ?? $order?->session?->creator?->paymentSetting;
         $order?->session?->unsetRelation('creator');
 
         return response()->json([
